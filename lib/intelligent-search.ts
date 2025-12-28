@@ -229,6 +229,19 @@ function extractBasicRequirements(query: string): SearchRequirement {
   return requirements
 }
 
+export interface MatchDetail {
+  category: 'Role' | 'Experience' | 'Location' | 'Skills' | 'Education' | 'Responsibility';
+  status: 'match' | 'partial' | 'miss';
+  score: number;
+  message: string;
+  weight: number;
+  maxWeight: number;
+}
+
+export interface ScoreBreakdown {
+  [key: string]: { earned: number; max: number; percentage: number };
+}
+
 export async function intelligentCandidateSearch(
   requirements: SearchRequirement, 
   candidates: any[]
@@ -256,94 +269,260 @@ export async function intelligentCandidateSearch(
   // Intelligent filtering based on parsed requirements
   const filteredCandidates = candidatesToFilter.map(candidate => {
     let score = 0
-    let matchingCriteria: string[] = []
+    let matchDetails: MatchDetail[] = []
+    let missingCriteria: string[] = []
+    let scoreBreakdown: ScoreBreakdown = {}
     
     console.log(`\n📝 Analyzing candidate: ${candidate.name} (${candidate.currentRole})`)
-    console.log(`📍 Location: ${candidate.location}`)
-    console.log(`⏱️ Experience: ${candidate.totalExperience}`)
-    console.log(`🛠️ Skills: ${(candidate.technicalSkills || []).join(', ')}`)
 
-    // Role matching
+    // Weights Configuration (Total: 100)
+    const weights = {
+      role: 30,
+      responsibility: 20,
+      experience: 15,
+      skills: 15,
+      location: 15,
+      education: 5
+    }
+
+    let totalMaxPossibleScore = 0
+
+    // Role matching (30%) - STRICT: Role must match or be very similar
     if (requirements.role) {
+      totalMaxPossibleScore += weights.role
       const roleMatch = calculateRoleMatch(requirements.role, candidate)
-      console.log(`🎯 Role match score: ${roleMatch} (${requirements.role} vs ${candidate.currentRole})`)
+      const earned = roleMatch * weights.role;
+      score += earned;
       
-      // STRICT PREFERENCE: High weight for role match, penalty for mismatch
-      if (roleMatch > 0.3) { // Slightly higher threshold
-        score += roleMatch * 45 // High weight for role match
-        matchingCriteria.push(`Role: ${candidate.currentRole} (${Math.round(roleMatch * 100)}%)`)
+      scoreBreakdown['Role'] = { earned: Math.round(earned), max: weights.role, percentage: Math.round(roleMatch * 100) };
+
+      if (roleMatch > 0.8) {
+        matchDetails.push({
+          category: 'Role',
+          status: 'match',
+          score: roleMatch,
+          message: `Role matches "${requirements.role}"`,
+          weight: earned,
+          maxWeight: weights.role
+        })
+      } else if (roleMatch >= 0.3) {
+        matchDetails.push({
+          category: 'Role',
+          status: 'partial',
+          score: roleMatch,
+          message: `Related role "${candidate.currentRole}"`,
+          weight: earned,
+          maxWeight: weights.role
+        })
       } else {
-        // If role doesn't match, apply penalty but allow recovery via deep responsibility match
-        // This ensures "must be in profile" preference while allowing some semantic flexibility
-        score -= 20 
+        // Role doesn't match at all - this is a critical mismatch
+        matchDetails.push({
+          category: 'Role',
+          status: 'miss',
+          score: roleMatch,
+          message: `Role mismatch (${candidate.currentRole || 'Not specified'}) - will be filtered out`,
+          weight: earned,
+          maxWeight: weights.role
+        })
+        missingCriteria.push(`Role: ${requirements.role}`)
       }
     }
 
-    // Implied Responsibilities Matching (Deep Semantic Understanding)
+    // Implied Responsibilities Matching (20%)
     if (requirements.impliedResponsibilities && requirements.impliedResponsibilities.length > 0) {
+      totalMaxPossibleScore += weights.responsibility
       const respScore = calculateResponsibilityMatch(requirements.impliedResponsibilities, candidate)
-      console.log(`📋 Responsibility match score: ${respScore}`)
+      const earned = respScore * weights.responsibility;
+      score += earned;
       
-      if (respScore > 0.1) {
-        score += respScore * 30 // Significant weight for deep understanding
-        matchingCriteria.push(`Responsibility Match: ${Math.round(respScore * 100)}%`)
-      }
+      scoreBreakdown['Responsibility'] = { earned: Math.round(earned), max: weights.responsibility, percentage: Math.round(respScore * 100) };
+
+      matchDetails.push({
+        category: 'Responsibility',
+        status: respScore > 0.6 ? 'match' : respScore > 0.2 ? 'partial' : 'miss',
+        score: respScore,
+        message: `${Math.round(respScore * 100)}% match on key tasks`,
+        weight: earned,
+        maxWeight: weights.responsibility
+      })
     }
 
-    // Experience matching
+    // Experience matching (15%)
     if (requirements.experience) {
+      totalMaxPossibleScore += weights.experience
       const expScore = calculateExperienceScore(requirements.experience, candidate.totalExperience)
-      console.log(`⏱️ Experience score: ${expScore} (${JSON.stringify(requirements.experience)} vs ${candidate.totalExperience})`)
-      score += expScore * 20 // Adjusted weight
-      if (expScore > 0.2) {
-        matchingCriteria.push(`Experience: ${candidate.totalExperience} (${Math.round(expScore * 100)}%)`)
+      const earned = expScore * weights.experience;
+      score += earned;
+      
+      scoreBreakdown['Experience'] = { earned: Math.round(earned), max: weights.experience, percentage: Math.round(expScore * 100) };
+
+      if (expScore > 0.8) {
+        matchDetails.push({
+          category: 'Experience',
+          status: 'match',
+          score: expScore,
+          message: `Meets experience (${candidate.totalExperience})`,
+          weight: earned,
+          maxWeight: weights.experience
+        })
+      } else if (expScore > 0.2) {
+        matchDetails.push({
+          category: 'Experience',
+          status: 'partial',
+          score: expScore,
+          message: `Partial experience (${candidate.totalExperience})`,
+          weight: earned,
+          maxWeight: weights.experience
+        })
+      } else {
+        matchDetails.push({
+          category: 'Experience',
+          status: 'miss',
+          score: expScore,
+          message: `Experience mismatch (Req: ${requirements.experience.min}+)`,
+          weight: earned,
+          maxWeight: weights.experience
+        })
+        missingCriteria.push(`Experience`)
       }
     }
 
-    // Location matching
+    // Location matching (15%)
     if (requirements.location) {
+      totalMaxPossibleScore += weights.location
       const locationScore = calculateLocationScore(requirements.location, candidate.location)
-      console.log(`📍 Location score: ${locationScore} (${requirements.location} vs ${candidate.location})`)
-      score += locationScore * 15
-      if (locationScore > 0.2) {
-        matchingCriteria.push(`Location: ${candidate.location} (${Math.round(locationScore * 100)}%)`)
+      const earned = locationScore * weights.location;
+      score += earned;
+      
+      scoreBreakdown['Location'] = { earned: Math.round(earned), max: weights.location, percentage: Math.round(locationScore * 100) };
+
+      if (locationScore > 0.8) {
+        matchDetails.push({
+          category: 'Location',
+          status: 'match',
+          score: locationScore,
+          message: `Matches location`,
+          weight: earned,
+          maxWeight: weights.location
+        })
+      } else if (locationScore > 0.2) {
+        matchDetails.push({
+          category: 'Location',
+          status: 'partial',
+          score: locationScore,
+          message: `Nearby (${candidate.location})`,
+          weight: earned,
+          maxWeight: weights.location
+        })
+      } else {
+        matchDetails.push({
+          category: 'Location',
+          status: 'miss',
+          score: locationScore,
+          message: `Location mismatch`,
+          weight: earned,
+          maxWeight: weights.location
+        })
+        missingCriteria.push(`Location`)
       }
     }
 
-    // Skills matching
+    // Skills matching (15%)
     if (requirements.skills && requirements.skills.length > 0) {
+      totalMaxPossibleScore += weights.skills
       const skillsScore = calculateSkillsScore(requirements.skills, candidate)
-      console.log(`🛠️ Skills score: ${skillsScore} (${requirements.skills.join(', ')} vs ${(candidate.technicalSkills || []).join(', ')})`)
-      score += skillsScore * 15 // Adjusted weight
-      if (skillsScore > 0.1) {
-        matchingCriteria.push(`Skills match: ${Math.round(skillsScore * 100)}%`)
+      const earned = skillsScore * weights.skills;
+      score += earned;
+      
+      scoreBreakdown['Skills'] = { earned: Math.round(earned), max: weights.skills, percentage: Math.round(skillsScore * 100) };
+
+      if (skillsScore > 0.6) {
+        matchDetails.push({
+          category: 'Skills',
+          status: 'match',
+          score: skillsScore,
+          message: `Good skills match`,
+          weight: earned,
+          maxWeight: weights.skills
+        })
+      } else if (skillsScore > 0.1) {
+        matchDetails.push({
+          category: 'Skills',
+          status: 'partial',
+          score: skillsScore,
+          message: `Some skills match`,
+          weight: earned,
+          maxWeight: weights.skills
+        })
+      } else {
+        matchDetails.push({
+          category: 'Skills',
+          status: 'miss',
+          score: skillsScore,
+          message: `Missing skills`,
+          weight: earned,
+          maxWeight: weights.skills
+        })
+        missingCriteria.push(`Skills`)
       }
     }
 
-    // Education matching
+    // Education matching (5%)
     if (requirements.education) {
+      totalMaxPossibleScore += weights.education
       const eduScore = calculateEducationScore(requirements.education, candidate)
-      console.log(`🎓 Education score: ${eduScore} (${requirements.education} vs ${candidate.highestQualification})`)
-      score += eduScore * 5 // Adjusted weight
-      if (eduScore > 0.2) {
-        matchingCriteria.push(`Education: ${candidate.highestQualification} (${Math.round(eduScore * 100)}%)`)
-      }
+      const earned = eduScore * weights.education;
+      score += earned;
+      
+      scoreBreakdown['Education'] = { earned: Math.round(earned), max: weights.education, percentage: Math.round(eduScore * 100) };
+
+      matchDetails.push({
+        category: 'Education',
+        status: eduScore > 0.8 ? 'match' : eduScore > 0.2 ? 'partial' : 'miss',
+        score: eduScore,
+        message: candidate.highestQualification || 'Not specified',
+        weight: earned,
+        maxWeight: weights.education
+      })
     }
 
-    console.log(`📊 Total score: ${score}/100 (${Math.round(score)}%)`)
+    // Normalize Score based on active requirements
+    // If no requirements provided, score is 0
+    const normalizedScore = totalMaxPossibleScore > 0 
+      ? (score / totalMaxPossibleScore) * 100 
+      : 0
+
+    console.log(`📊 Raw score: ${score}/${totalMaxPossibleScore} -> Normalized: ${Math.round(normalizedScore)}%`)
 
     return {
       ...candidate,
-      relevanceScore: Math.min(0.95, score / 100),
-      matchPercentage: Math.round((score / 100) * 100),
-      matchingCriteria,
+      relevanceScore: Math.min(0.99, normalizedScore / 100),
+      matchPercentage: Math.round(normalizedScore),
+      matchDetails,
+      scoreBreakdown,
+      gapAnalysis: missingCriteria,
       parsedRequirements: requirements
     }
   })
 
   // Sort by relevance score and filter out poor matches
+  // STRICT FILTERING: Only show candidates with meaningful matches
   const relevantCandidates = filteredCandidates
-    .filter(candidate => candidate.relevanceScore >= 0.15) // Minimum 15% relevance for semantic search
+    .filter(candidate => {
+      // Minimum 50% relevance score
+      if (candidate.relevanceScore < 0.50) return false
+      
+      // CRITICAL: If role is specified, candidate MUST have matching or similar role (at least 30% role match)
+      if (requirements.role) {
+        const roleMatch = calculateRoleMatch(requirements.role, candidate)
+        if (roleMatch < 0.3) {
+          console.log(`❌ Filtering out ${candidate.name}: Role mismatch (${candidate.currentRole} vs ${requirements.role}, match: ${roleMatch})`)
+          return false
+        }
+      }
+      
+      return true
+    })
     .sort((a, b) => b.relevanceScore - a.relevanceScore)
 
   console.log(`Found ${relevantCandidates.length} relevant candidates`)
@@ -371,7 +550,7 @@ function calculateRoleMatch(requiredRole: string, candidate: any): number {
     'fleet manager': ['fleet management', 'transportation manager', 'logistics manager', 'operations manager', 'fleet operations manager', 'vehicle fleet manager'],
     'truck driver': ['driver', 'heavy vehicle driver', 'commercial driver', 'truck operator', 'heavy truck driver', 'delivery driver', 'commercial vehicle driver'],
     'logistics coordinator': ['logistics executive', 'supply chain coordinator', 'logistics specialist', 'operations coordinator', 'logistics officer'],
-    'warehouse manager': ['warehouse executive', 'store manager', 'inventory manager', 'warehouse supervisor', 'store incharge', 'warehouse incharge', 'godown manager'],
+    'warehouse manager': ['warehouse executive', 'store manager', 'inventory manager', 'warehouse supervisor', 'store incharge', 'warehouse incharge', 'godown manager', 'warehouse operations manager', 'store operations manager', 'inventory operations manager'],
     'supply chain manager': ['supply chain executive', 'procurement manager', 'operations manager', 'logistics manager', 'scm manager'],
     'transport manager': ['transportation manager', 'fleet manager', 'logistics manager', 'dispatch manager', 'transport operations manager'],
     'transport executive': ['transport manager', 'logistics executive', 'fleet executive', 'transport coordinator', 'operations executive', 'operation executive'],
@@ -400,7 +579,7 @@ function calculateRoleMatch(requiredRole: string, candidate: any): number {
     'fleet manager': ['fleet', 'transportation', 'logistics', 'vehicle', 'route', 'driver management', 'fuel management'],
     'truck driver': ['driving', 'vehicle', 'transportation', 'license', 'delivery', 'logistics', 'commercial driving'],
     'logistics coordinator': ['logistics', 'supply chain', 'coordination', 'planning', 'inventory', 'transportation'],
-    'warehouse manager': ['warehouse', 'inventory', 'store', 'logistics', 'supply chain', 'operations'],
+    'warehouse manager': ['warehouse', 'inventory', 'store', 'godown', 'stock', 'warehousing', 'storage', 'inventory control', 'stock management'],
     'supply chain manager': ['supply chain', 'procurement', 'logistics', 'inventory', 'operations', 'vendor management'],
     'transport manager': ['transportation', 'fleet', 'logistics', 'route', 'dispatch', 'vehicle management'],
     'transport executive': ['transportation', 'logistics', 'fleet', 'coordination', 'operations', 'vehicle']
@@ -411,7 +590,14 @@ function calculateRoleMatch(requiredRole: string, candidate: any): number {
     requiredSkills.some(reqSkill => skill.includes(reqSkill))
   )
 
-  return skillMatches.length > 0 ? 0.6 : 0.1 // Lowered floor for non-matching roles
+  // STRICT: If role doesn't match and only has some related skills, give very low score
+  // Only allow skill-based matching if there's significant skill overlap (at least 2-3 skills)
+  if (skillMatches.length >= 2) {
+    return 0.4 // Partial match based on skills only
+  }
+  
+  // If role doesn't match at all, return 0 (will be filtered out)
+  return 0
 }
 
 function calculateExperienceScore(requiredExp: any, candidateExp: string): number {
@@ -463,23 +649,46 @@ function calculateExperienceScore(requiredExp: any, candidateExp: string): numbe
 function calculateLocationScore(requiredLocation: string, candidateLocation: string): number {
   if (!candidateLocation) return 0.3
   
-  const required = requiredLocation.toLowerCase()
-  const candidate = candidateLocation.toLowerCase()
+  const required = requiredLocation.toLowerCase().trim()
+  const candidate = candidateLocation.toLowerCase().trim()
   
+  // 1. Direct match (Exact or Substring)
   if (candidate.includes(required) || required.includes(candidate)) return 1
   
-  // Check for major cities and their variations
-  const locationVariations: { [key: string]: string[] } = {
-    'delhi': ['delhi', 'ncr', 'new delhi', 'gurgaon', 'noida', 'faridabad'],
-    'mumbai': ['mumbai', 'bombay', 'navi mumbai', 'thane'],
-    'bangalore': ['bangalore', 'bengaluru'],
-    'chennai': ['chennai', 'madras']
-  }
+  // 2. Location Clusters (Bidirectional Proximity)
+  const locationClusters: string[][] = [
+    // NCR Region
+    ['delhi', 'new delhi', 'ncr', 'gurgaon', 'gurugram', 'noida', 'faridabad', 'ghaziabad', 'greater noida', 'manesar', 'bawal', 'dharuhera', 'bhiwadi', 'neemrana'],
+    // Mumbai Region
+    ['mumbai', 'bombay', 'navi mumbai', 'thane', 'kalyan', 'bhiwandi', 'vasai', 'virar', 'panvel'],
+    // Pune Region (sometimes considered near Mumbai for broader searches)
+    ['pune', 'pimpri', 'chinchwad', 'chakan', 'talegaon'],
+    // Punjab Region
+    ['ludhiana', 'chandigarh', 'mohali', 'jalandhar', 'amritsar', 'patiala', 'lodhwal'],
+    // Bangalore
+    ['bangalore', 'bengaluru', 'electronic city', 'whitefield', 'hosur'],
+    // Chennai
+    ['chennai', 'madras', 'kanchipuram', 'sriperumbudur', 'oragadam'],
+    // Hyderabad
+    ['hyderabad', 'secunderabad', 'cyberabad'],
+    // Kolkata
+    ['kolkata', 'calcutta', 'howrah', 'salt lake'],
+    // Gujarat
+    ['ahmedabad', 'gandhinagar', 'vadodara', 'surat', 'sanand'],
+    // MP
+    ['indore', 'dewas', 'pithampur', 'bhopal']
+  ]
   
-  for (const [city, variations] of Object.entries(locationVariations)) {
-    if (required.includes(city)) {
-      for (const variation of variations) {
-        if (candidate.includes(variation)) return 0.9
+  // Find which cluster(s) the required location belongs to
+  for (const cluster of locationClusters) {
+    const isRequiredInCluster = cluster.some(city => required.includes(city) || city.includes(required))
+    
+    if (isRequiredInCluster) {
+      // Check if candidate is in the same cluster
+      const isCandidateInCluster = cluster.some(city => candidate.includes(city) || city.includes(candidate))
+      
+      if (isCandidateInCluster) {
+        return 0.85 // High score for nearby/same-region matches
       }
     }
   }

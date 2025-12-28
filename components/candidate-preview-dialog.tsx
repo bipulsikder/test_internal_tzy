@@ -25,6 +25,7 @@ import {
 import {
   Download,
   Copy,
+  Eye,
   User,
   MapPin,
   Briefcase,
@@ -436,7 +437,7 @@ export function CandidatePreviewDialog({
                 </div>
               </div>
               <div className="flex items-center space-x-3">
-                {showRelevanceScore && safeCandidate.relevanceScore && (
+                {showRelevanceScore && safeCandidate.relevanceScore !== undefined && (
                   <Badge className={`${getRelevanceColor(safeCandidate.relevanceScore)} font-medium text-sm px-3 py-1`}>
                     {getRelevanceLabel(safeCandidate.relevanceScore)} ({Math.round(safeCandidate.relevanceScore * 100)}%)
                   </Badge>
@@ -1211,7 +1212,7 @@ export function CandidatePreviewDialog({
                                 </h5>
                                 <ul className="text-sm space-y-1 text-gray-600">
                                   <li>• {safeCandidate.matchingKeywords.length} keywords matched</li>
-                                  <li>• Match quality: {getMatchQuality(safeCandidate.matchPercentage || Math.round(safeCandidate.relevanceScore * 100))}</li>
+                                  <li>• Match quality: {getMatchQuality(safeCandidate.matchPercentage || Math.round((safeCandidate.relevanceScore || 0) * 100))}</li>
                                   <li>• Primary matches: {getPrimaryMatchArea(safeCandidate)}</li>
                                 </ul>
                               </div>
@@ -1237,14 +1238,8 @@ export function CandidatePreviewDialog({
                           <div className="flex space-x-2">
                             <Button variant="outline" size="sm" asChild className="hover:bg-blue-50">
                               <a href={safeCandidate.fileUrl} target="_blank" rel="noopener noreferrer">
-                                <ExternalLink className="h-4 w-4 mr-2" />
-                                Open Full
-                              </a>
-                            </Button>
-                            <Button variant="outline" size="sm" asChild className="hover:bg-green-50">
-                              <a href={safeCandidate.fileUrl} download={safeCandidate.fileName}>
-                                <Download className="h-4 w-4 mr-2" />
-                                Download
+                                <Eye className="h-4 w-4 mr-2" />
+                                View CV
                               </a>
                             </Button>
                           </div>
@@ -1420,9 +1415,9 @@ export function CandidatePreviewDialog({
                       </Button>
                       {safeCandidate.fileUrl && (
                         <Button variant="outline" asChild className="h-12 hover:bg-purple-50">
-                          <a href={safeCandidate.fileUrl} download={safeCandidate.fileName}>
-                            <Download className="h-5 w-5 mr-2" />
-                            Download
+                          <a href={safeCandidate.fileUrl} target="_blank" rel="noopener noreferrer">
+                            <Eye className="h-5 w-5 mr-2" />
+                            View CV
                           </a>
                         </Button>
                       )}

@@ -258,3 +258,4 @@ if (require.main === module) {
 }
 
 export { MigrationService }
+

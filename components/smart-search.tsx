@@ -61,6 +61,7 @@ interface SearchResult {
   university?: string
   certifications?: string[]
   relevanceScore: number
+  matchPercentage?: number
   matchingKeywords: string[]
   fileUrl?: string
   fileName?: string
@@ -81,6 +82,18 @@ interface SearchResult {
   notes?: string
   rating?: number
   tags?: string[]
+  matchDetails?: {
+    category: string
+    status: 'match' | 'partial' | 'miss'
+    score: number
+    message: string
+    weight: number
+  }[]
+  scoreBreakdown?: {
+    [key: string]: { earned: number; max: number; percentage: number }
+  }
+  matchSummary?: string
+  gapAnalysis?: string[]
 }
 
 interface MinimalSearchFilters {
@@ -108,6 +121,18 @@ interface SidebarFilters {
   ageRange: { min: string; max: string }
   languages: string[]
   englishFluency: string[]
+}
+
+const getAvatarColor = (score: number) => {
+  if (score >= 0.8) return "bg-green-500"
+  if (score >= 0.5) return "bg-yellow-500"
+  return "bg-gray-400"
+}
+
+const getMatchColor = (score: number) => {
+  if (score >= 0.8) return "bg-green-100 text-green-800 hover:bg-green-200"
+  if (score >= 0.5) return "bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
+  return "bg-gray-100 text-gray-800 hover:bg-gray-200"
 }
 
 export function SmartSearch() {
@@ -164,11 +189,14 @@ export function SmartSearch() {
 
   // Client-side pagination
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(1000)
+  const [pageSize, setPageSize] = useState(25)
   // Server-side pagination state
   const [serverPaginated, setServerPaginated] = useState(false)
   const [totalResultsServer, setTotalResultsServer] = useState(0)
-  const [lastSearchPayload, setLastSearchPayload] = useState<any | null>(null)
+  const [lastSearchParams, setLastSearchParams] = useState<any | null>(null)
+  
+  // Cache for search results to improve pagination performance
+  const [resultsCache, setResultsCache] = useState<Record<string, { items: SearchResult[], total: number, serverPaginated: boolean }>>({})
 
   const { toast } = useToast()
 
@@ -176,199 +204,80 @@ export function SmartSearch() {
     setMounted(true)
   }, [])
 
-  // Apply sidebar filters to search results
-  useEffect(() => {
-    if (searchResults.length === 0) {
-      setFilteredResults([])
-      return
-    }
-
-    let filtered = [...searchResults]
-
-    // Apply all sidebar filters
-    if (sidebarFilters.hideInactive) {
-      filtered = filtered.filter((candidate) => candidate.status !== "rejected")
-    }
-
-    if (sidebarFilters.showOnlyAvailable) {
-      filtered = filtered.filter(
-        (candidate) =>
-          candidate.noticePeriod &&
-          (candidate.noticePeriod.toLowerCase().includes("immediate") ||
-            candidate.noticePeriod.toLowerCase().includes("15 days")),
-      )
-    }
-
-    if (sidebarFilters.mustHaveKeywords.length > 0) {
-      filtered = filtered.filter((candidate) => {
-        const searchText = [
-          candidate.name,
-          candidate.currentRole,
-          candidate.resumeText,
-          ...(candidate.technicalSkills || []),
-          ...(candidate.softSkills || []),
-        ]
-          .join(" ")
-          .toLowerCase()
-
-        return sidebarFilters.mustHaveKeywords.every((keyword) => searchText.includes((keyword || "").toLowerCase()))
-      })
-    }
-
-    if (sidebarFilters.excludeKeywords.length > 0) {
-      filtered = filtered.filter((candidate) => {
-        const searchText = [
-          candidate.name,
-          candidate.currentRole,
-          candidate.resumeText,
-          ...(candidate.technicalSkills || []),
-          ...(candidate.softSkills || []),
-        ]
-          .join(" ")
-          .toLowerCase()
-
-        return !sidebarFilters.excludeKeywords.some((keyword) => searchText.includes((keyword || "").toLowerCase()))
-      })
-    }
-
-    if (sidebarFilters.currentCity.length > 0) {
-      filtered = filtered.filter((candidate) =>
-        sidebarFilters.currentCity.some((city) =>
-          (candidate.location || "").toLowerCase().includes(city.toLowerCase()),
-        ),
-      )
-    }
-
-    if (sidebarFilters.experience.min || sidebarFilters.experience.max) {
-      filtered = filtered.filter((candidate) => {
-        const exp = Number.parseInt(candidate.totalExperience) || 0
-        const minExp = Number.parseInt(sidebarFilters.experience.min) || 0
-        const maxExp = Number.parseInt(sidebarFilters.experience.max) || 999
-        return exp >= minExp && exp <= maxExp
-      })
-    }
-
-    if (sidebarFilters.salaryRange.min || sidebarFilters.salaryRange.max) {
-      filtered = filtered.filter((candidate) => {
-        const salary = Math.max(
-          Number.parseFloat(candidate.currentSalary || "0") || 0,
-          Number.parseFloat(candidate.expectedSalary || "0") || 0,
-        )
-        const minSalary = Number.parseFloat(sidebarFilters.salaryRange.min) || 0
-        const maxSalary = Number.parseFloat(sidebarFilters.salaryRange.max) || 999
-        return salary === 0 || (salary >= minSalary && salary <= maxSalary)
-      })
-    }
-
-    if (sidebarFilters.education.length > 0) {
-      filtered = filtered.filter((candidate) =>
-        sidebarFilters.education.some((edu) =>
-          (candidate.highestQualification || "").toLowerCase().includes(edu.toLowerCase()),
-        ),
-      )
-    }
-
-    if (sidebarFilters.gender.length > 0) {
-      filtered = filtered.filter((candidate) => sidebarFilters.gender.includes(candidate.gender || ""))
-    }
-
-    if (sidebarFilters.languages.length > 0) {
-      filtered = filtered.filter((candidate) =>
-        sidebarFilters.languages.some((lang) =>
-          (candidate.languagesKnown || []).some((candidateLang) =>
-            candidateLang.toLowerCase().includes(lang.toLowerCase()),
-          ),
-        ),
-      )
-    }
-
-    setFilteredResults(filtered)
-  }, [searchResults, sidebarFilters])
-
-  // Get AI keyword suggestions
-  const getAISuggestions = async (input: string) => {
-    if (!input.trim() || input.length < 2) {
-      setAiSuggestions([])
-      return
-    }
-
-    setIsLoadingSuggestions(true)
-    try {
-      const response = await fetch("/api/ai-suggestions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input, context: "logistics" }),
-        signal: aiAbortRef.current?.signal,
-      } as any)
-
-      if (response.ok) {
-        const suggestions = await response.json()
-        setAiSuggestions(suggestions.slice(0, 6)) // Show max 6 suggestions
-      }
-    } catch (error) {
-      logger.error("Failed to get AI suggestions:", error)
-    } finally {
-      setIsLoadingSuggestions(false)
-    }
-  }
-
-  // Debounced AI suggestions with abort to reduce lag
-  const aiAbortRef = useRef<AbortController | null>(null)
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      // Abort previous request if in-flight
-      if (aiAbortRef.current) {
-        aiAbortRef.current.abort()
-      }
-      aiAbortRef.current = new AbortController()
-      getAISuggestions(keywordInput)
-    }, 500)
-
-    return () => clearTimeout(timer)
-  }, [keywordInput])
-
-  const handleSmartSearch = async () => {
-    if (!smartSearchQuery.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a search query",
-        variant: "destructive",
-      })
-      return
-    }
-
+  // Common search execution function
+  const executeSearch = async (page: number, params: any) => {
     setIsSearching(true)
-    setHasSearched(true)
-    setCurrentPage(1)
-    
-    const params = new URLSearchParams({
-      type: 'smart',
-      query: smartSearchQuery,
+    if (page === 1) setHasSearched(true)
+    setCurrentPage(page)
+    setLastSearchParams(params) // Save params for pagination
+
+    // Check cache first
+    const cacheKey = JSON.stringify({ ...params, page })
+    if (resultsCache[cacheKey]) {
+      logger.info(`Serving search results from cache for page ${page}`)
+      const cached = resultsCache[cacheKey]
+      setSearchResults(cached.items)
+      // filteredResults will be set by useEffect hook that applies filters
+      setTotalResultsServer(cached.total)
+      setServerPaginated(cached.serverPaginated)
+      setIsSearching(false)
+      return
+    }
+
+    // Construct URL params
+    const searchParams = new URLSearchParams({
+      type: params.type,
       paginate: 'true',
-      page: String(1),
+      page: String(page),
       perPage: String(pageSize),
-    }).toString()
+    })
+
+    if (params.query) searchParams.set(params.type === 'smart' ? 'query' : 'keywords', params.query)
+    if (params.jd) searchParams.set('jd', params.jd)
     
-    logger.info(`Smart-search fetch: mode=smart query="${smartSearchQuery.slice(0, 40)}..." page=1`)
+    // Add manual filters if present
+    if (params.filters) {
+      Object.entries(params.filters).forEach(([key, value]) => {
+        if (value) searchParams.set(key, String(value))
+      })
+    }
+    
+    logger.info(`Search fetch: mode=${params.type} page=${page}`)
+    
     try {
-      const response = await fetch(`/api/search?${params}`, {
+      const response = await fetch(`/api/search?${searchParams.toString()}`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       })
 
-      if (!response.ok) throw new Error("Smart search failed")
+      if (!response.ok) throw new Error("Search failed")
 
       const data = await response.json()
-      logger.info(`Smart-search result: count=${Array.isArray(data) ? data.length : data.items?.length || 0}`)
       const items = Array.isArray(data) ? data : (data.items || [])
       const total = Array.isArray(data) ? items.length : (data.total || items.length)
+      
       setServerPaginated(!Array.isArray(data))
       setTotalResultsServer(total)
-      setSearchResults(processSearchResults(items))
-      toast({
-        title: "Search Complete",
-        description: `Found ${total} matching candidates`,
-      })
+      const processedResults = processSearchResults(items)
+      setSearchResults(processedResults)
+      // filteredResults will be set by useEffect hook that applies filters
+      
+      // Update cache
+      setResultsCache(prev => ({
+        ...prev,
+        [cacheKey]: {
+          items: processedResults,
+          total: total,
+          serverPaginated: !Array.isArray(data)
+        }
+      }))
+      
+      if (page === 1) {
+        toast({
+          title: "Search Complete",
+          description: `Found ${total} matching candidates`,
+        })
+      }
     } catch (error) {
       logger.error("Search error:", error)
       toast({
@@ -382,125 +291,45 @@ export function SmartSearch() {
     }
   }
 
-  const handleJDSearch = async () => {
+  const handleSmartSearch = () => {
+    if (!smartSearchQuery.trim()) {
+      toast({ title: "Error", description: "Please enter a search query", variant: "destructive" })
+      return
+    }
+    const params = { type: 'smart', query: smartSearchQuery }
+    setLastSearchParams(params)
+    executeSearch(1, params)
+  }
+
+  const handleJDSearch = () => {
     if (!jobDescription.trim()) {
-      toast({
-        title: "Error",
-        description: "Please paste a job description",
-        variant: "destructive",
-      })
+      toast({ title: "Error", description: "Please paste a job description", variant: "destructive" })
       return
     }
-
-    setIsSearching(true)
-    setHasSearched(true)
-    setCurrentPage(1)
-    const payload = {
-      jobDescription: jobDescription,
-      searchType: "jd",
-      paginate: true,
-      page: 1,
-      perPage: pageSize,
-    }
-    setLastSearchPayload(payload)
-    logger.info(`Smart-search fetch: mode=jd query="${jobDescription.slice(0, 40)}..." page=1`)
-    const params = new URLSearchParams({
-      type: 'jd',
-      paginate: 'true',
-      page: String(1),
-      perPage: String(pageSize),
-      jd: jobDescription,
-    }).toString()
-    try {
-      const response = await fetch(`/api/search?${params}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      })
-
-      if (!response.ok) throw new Error("JD Search failed")
-
-      const data = await response.json()
-      logger.info(`Smart-search result: count=${Array.isArray(data) ? data.length : data.items?.length || 0}`)
-      const items = Array.isArray(data) ? data : (data.items || [])
-      const total = Array.isArray(data) ? items.length : (data.total || items.length)
-      setServerPaginated(!Array.isArray(data))
-      setTotalResultsServer(total)
-      setSearchResults(processSearchResults(items))
-      toast({
-        title: "JD Analysis Complete",
-        description: `Found ${total} candidates matching the job requirements`,
-      })
-    } catch (error) {
-      logger.error("JD Search error:", error)
-      toast({
-        title: "Error",
-        description: "JD analysis failed. Please try again.",
-        variant: "destructive",
-      })
-      setSearchResults([])
-    } finally {
-      setIsSearching(false)
-    }
+    const params = { type: 'jd', jd: jobDescription }
+    setLastSearchParams(params)
+    executeSearch(1, params)
   }
 
-  const handleManualSearch = async () => {
+  const handleManualSearch = () => {
     if (manualFilters.keywords.length === 0) {
-      toast({
-        title: "Error",
-        description: "Please add at least one keyword",
-        variant: "destructive",
-      })
+      toast({ title: "Error", description: "Please add at least one keyword", variant: "destructive" })
       return
     }
-
-    setIsSearching(true)
-    setHasSearched(true)
-    setCurrentPage(1)
-    
-    const params = new URLSearchParams({
+    const params = {
       type: 'manual',
-      paginate: 'true',
-      page: String(1),
-      perPage: String(pageSize),
-      keywords: manualFilters.keywords.join(','),
-      location: manualFilters.location,
-      minExperience: manualFilters.minExperience,
-      maxExperience: manualFilters.maxExperience,
-      education: manualFilters.education,
-    }).toString()
-    
-    logger.info(`Smart-search fetch: mode=manual query="${manualFilters.keywords.join(', ').slice(0, 40)}..." page=1`)
-    try {
-      const response = await fetch(`/api/search?${params}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      })
-
-      if (!response.ok) throw new Error("Manual search failed")
-
-      const data = await response.json()
-      logger.info(`Smart-search result: count=${Array.isArray(data) ? data.length : data.items?.length || 0}`)
-      const items = Array.isArray(data) ? data : (data.items || [])
-      const total = Array.isArray(data) ? items.length : (data.total || items.length)
-      setServerPaginated(!Array.isArray(data))
-      setTotalResultsServer(total)
-      setSearchResults(processSearchResults(items))
-      toast({
-        title: "Search Complete",
-        description: `Found ${total} matching candidates`,
-      })
-    } catch (error) {
-      logger.error("Manual search error:", error)
-      toast({
-        title: "Error",
-        description: "Search failed. Please try again.",
-        variant: "destructive",
-      })
-      setSearchResults([])
-    } finally {
-      setIsSearching(false)
+      query: manualFilters.keywords.join(','),
+      filters: {
+        location: manualFilters.location,
+        minExperience: manualFilters.minExperience,
+        maxExperience: manualFilters.maxExperience,
+        education: manualFilters.education,
+      }
     }
+    setLastSearchParams(params)
+    executeSearch(1, params)
   }
+
 
   const processSearchResults = (results: any[]) => {
     return Array.isArray(results)
@@ -512,6 +341,7 @@ export function SmartSearch() {
           certifications: Array.isArray(result.certifications) ? result.certifications : [],
           languagesKnown: Array.isArray(result.languagesKnown) ? result.languagesKnown : [],
           relevanceScore: typeof result.relevanceScore === "number" ? result.relevanceScore : 0,
+          matchPercentage: typeof result.matchPercentage === "number" ? result.matchPercentage : Math.round((result.relevanceScore || 0) * 100),
           status: result.status || "new",
           uploadedAt: result.uploadedAt || new Date().toISOString(),
           // Avoid rendering huge resume text in list to reduce lag. Fetch full on preview.
@@ -519,6 +349,143 @@ export function SmartSearch() {
         }))
       : []
   }
+
+  // Apply sidebar filters to search results
+  const applyFilters = (results: SearchResult[]): SearchResult[] => {
+    return results.filter((candidate) => {
+      // Must have keywords filter
+      if (sidebarFilters.mustHaveKeywords.length > 0) {
+        const candidateText = [
+          candidate.name || "",
+          candidate.currentRole || "",
+          candidate.location || "",
+          ...(candidate.technicalSkills || []),
+          ...(candidate.softSkills || []),
+          candidate.resumeText || "",
+        ].join(" ").toLowerCase()
+
+        const hasAllKeywords = sidebarFilters.mustHaveKeywords.every(keyword =>
+          candidateText.includes(keyword.toLowerCase())
+        )
+        if (!hasAllKeywords) return false
+      }
+
+      // Exclude keywords filter
+      if (sidebarFilters.excludeKeywords.length > 0) {
+        const candidateText = [
+          candidate.name || "",
+          candidate.currentRole || "",
+          candidate.location || "",
+          ...(candidate.technicalSkills || []),
+          ...(candidate.softSkills || []),
+          candidate.resumeText || "",
+        ].join(" ").toLowerCase()
+
+        const hasExcludedKeyword = sidebarFilters.excludeKeywords.some(keyword =>
+          candidateText.includes(keyword.toLowerCase())
+        )
+        if (hasExcludedKeyword) return false
+      }
+
+      // Hide inactive filter - currently disabled as "inactive" status doesn't exist in the type definition
+      // This can be enabled if the status type is extended to include "inactive"
+      // if (sidebarFilters.hideInactive && candidate.status === "inactive") {
+      //   return false
+      // }
+
+      // Show only available filter
+      if (sidebarFilters.showOnlyAvailable) {
+        const noticePeriod = candidate.noticePeriod || ""
+        const isAvailable = noticePeriod.toLowerCase().includes("immediate") ||
+          noticePeriod.toLowerCase().includes("0") ||
+          noticePeriod === "" ||
+          noticePeriod.toLowerCase().includes("ready")
+        if (!isAvailable) return false
+      }
+
+      // Current City filter
+      if (sidebarFilters.currentCity.length > 0) {
+        const candidateLocation = (candidate.location || "").toLowerCase()
+        const matchesCity = sidebarFilters.currentCity.some(city =>
+          candidateLocation.includes(city.toLowerCase())
+        )
+        if (!matchesCity) return false
+      }
+
+      // Experience filter
+      if (sidebarFilters.experience.min || sidebarFilters.experience.max) {
+        const experienceYears = parseFloat(candidate.totalExperience?.replace(/[^0-9.]/g, "") || "0")
+        const minExp = sidebarFilters.experience.min ? parseFloat(sidebarFilters.experience.min) : 0
+        const maxExp = sidebarFilters.experience.max ? parseFloat(sidebarFilters.experience.max) : Infinity
+        if (experienceYears < minExp || experienceYears > maxExp) return false
+      }
+
+      // Salary range filter
+      if (sidebarFilters.salaryRange.min || sidebarFilters.salaryRange.max) {
+        const currentSalary = candidate.currentSalary || ""
+        const expectedSalary = candidate.expectedSalary || ""
+        const salaryStr = currentSalary || expectedSalary
+        
+        if (salaryStr) {
+          const salaryMatch = salaryStr.match(/(\d+(?:\.\d+)?)/)
+          if (salaryMatch) {
+            const salaryValue = parseFloat(salaryMatch[1])
+            const minSalary = sidebarFilters.salaryRange.min ? parseFloat(sidebarFilters.salaryRange.min) : 0
+            const maxSalary = sidebarFilters.salaryRange.max ? parseFloat(sidebarFilters.salaryRange.max) : Infinity
+            if (salaryValue < minSalary || salaryValue > maxSalary) return false
+          }
+        }
+      }
+
+      // Education filter
+      if (sidebarFilters.education.length > 0) {
+        const candidateEducation = [
+          candidate.degree || "",
+          candidate.highestQualification || "",
+          candidate.education || "",
+        ].join(" ").toLowerCase()
+
+        const matchesEducation = sidebarFilters.education.some(edu => {
+          const eduLower = edu.toLowerCase()
+          return candidateEducation.includes(eduLower) ||
+            (eduLower.includes("graduate") && (candidateEducation.includes("bachelor") || candidateEducation.includes("master"))) ||
+            (eduLower.includes("post graduate") && candidateEducation.includes("master"))
+        })
+        if (!matchesEducation) return false
+      }
+
+      // Gender filter
+      if (sidebarFilters.gender.length > 0) {
+        const candidateGender = (candidate.gender || "").toLowerCase()
+        const matchesGender = sidebarFilters.gender.some(g =>
+          candidateGender.includes(g.toLowerCase())
+        )
+        if (!matchesGender) return false
+      }
+
+      // Languages filter
+      if (sidebarFilters.languages.length > 0) {
+        const candidateLanguages = (candidate.languagesKnown || []).map(l => l.toLowerCase())
+        const matchesLanguage = sidebarFilters.languages.some(lang =>
+          candidateLanguages.some(cl => cl.includes(lang.toLowerCase()))
+        )
+        if (!matchesLanguage) return false
+      }
+
+      return true
+    })
+  }
+
+  // Apply filters whenever searchResults or sidebarFilters change
+  useEffect(() => {
+    if (searchResults.length > 0) {
+      const filtered = applyFilters(searchResults)
+      setFilteredResults(filtered)
+      setCurrentPage(1) // Reset to first page when filters change
+    } else {
+      setFilteredResults([])
+    }
+  }, [searchResults, sidebarFilters])
 
   const openPreview = async (candidate: SearchResult) => {
     try {
@@ -585,8 +552,10 @@ export function SmartSearch() {
     setAiSuggestions([])
     setSearchResults([])
     setFilteredResults([])
+    setResultsCache({})
     setHasSearched(false)
     setCurrentPage(1)
+    setLastSearchParams(null) // Clear search parameters
   }
 
   const updateCandidateStatus = async (candidateId: string, status: string) => {
@@ -686,36 +655,14 @@ export function SmartSearch() {
   }
 
   const getInitials = (name: string) => {
+    if (!name) return "??"
     return name
       .split(" ")
       .map((n) => n[0])
+      .slice(0, 2)
       .join("")
       .toUpperCase()
-      .slice(0, 2)
   }
-
-  // Fetch server page on pagination change
-  useEffect(() => {
-    const fetchPage = async () => {
-      if (!serverPaginated || !hasSearched || !lastSearchPayload) return
-      try {
-        const response = await fetch("/api/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...lastSearchPayload, page: currentPage, perPage: pageSize, paginate: true }),
-        })
-        if (!response.ok) throw new Error("Search page fetch failed")
-        const data = await response.json()
-        const items = Array.isArray(data) ? data : (data.items || [])
-        const total = Array.isArray(data) ? items.length : (data.total || items.length)
-        setTotalResultsServer(total)
-        setSearchResults(processSearchResults(items))
-      } catch (e) {
-        logger.error("Pagination fetch error:", e)
-      }
-    }
-    fetchPage()
-  }, [currentPage, pageSize])
 
   const sortedResults = [...filteredResults].sort((a, b) => {
     switch (sortBy) {
@@ -1570,7 +1517,7 @@ export function SmartSearch() {
                     </>
                   ) : (
                     <>
-                      {filteredResults.length} profiles found
+                      {totalResults} profiles found
                       {searchMode === "smart" && smartSearchQuery && ` for "${smartSearchQuery}"`}
                       {searchMode === "jd" && " for Job Description Analysis"}
                       {searchMode === "manual" &&
@@ -1579,11 +1526,9 @@ export function SmartSearch() {
                     </>
                   )}
                 </h3>
-                {filteredResults.length !== searchResults.length && (
-                  <p className="text-sm text-gray-600 mt-1">
-                    Showing {filteredResults.length} of {searchResults.length} total results (filtered)
-                  </p>
-                )}
+                <p className="text-sm text-gray-600 mt-1">
+                  Showing {startIdx + 1}-{Math.min(endIdx, totalResults)} of {totalResults} results
+                </p>
               </div>
               <div className="flex items-center space-x-4">
                 <Button variant="outline" onClick={resetSearch}>
@@ -1650,161 +1595,133 @@ export function SmartSearch() {
             ) : (
               <div>
                 <div className="grid gap-6">
+                {/* Compact Candidate Card Layout */}
                 {pagedResults.map((result, index) => (
                   <Card
                     key={`${result._id || result.id}-${index}`}
-                    className="hover:shadow-lg transition-all duration-300 border-l-4 border-l-blue-500"
+                    className={`transition-all hover:shadow-md cursor-pointer border-l-4 ${
+                      result.relevanceScore >= 0.8
+                        ? "border-l-green-500"
+                        : result.relevanceScore >= 0.5
+                          ? "border-l-yellow-500"
+                          : "border-l-gray-300"
+                    }`}
+                    onClick={() => openPreview(result)}
                   >
                     <CardContent className="p-6">
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-start space-x-4 flex-1">
-                          <Avatar className="h-14 w-14">
-                            <AvatarFallback className="bg-blue-100 text-blue-600 font-semibold text-lg">
-                              {getInitials(result.name || "Unknown")}
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-start space-x-3">
+                          <Avatar className="h-10 w-10 border-2 border-white shadow-sm">
+                            <AvatarFallback className={`${getAvatarColor(result.relevanceScore)} text-white text-xs`}>
+                              {getInitials(result.name)}
                             </AvatarFallback>
                           </Avatar>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center space-x-3 mb-2">
-                              <h3 className="text-xl font-bold text-gray-900">{result.name || "Unknown"}</h3>
-                              {(searchMode === "smart" || searchMode === "jd") && (
-                                <Badge className={`${getRelevanceColor(result.relevanceScore || 0)} font-medium`}>
-                                  {getRelevanceLabel(result.relevanceScore || 0)} (
-                                  {Math.round((result.relevanceScore || 0) * 100)}%)
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                              <div className="flex items-center text-gray-600">
-                                <Briefcase className="h-4 w-4 mr-2" />
-                                <span className="font-medium">{result.currentRole || "Not specified"}</span>
-                              </div>
-                              <div className="flex items-center text-gray-600">
-                                <Building className="h-4 w-4 mr-2" />
-                                <span>{result.currentCompany || "Not specified"}</span>
-                              </div>
-                              <div className="flex items-center text-gray-600">
-                                <MapPin className="h-4 w-4 mr-2" />
-                                <span>{result.location || "Not specified"}</span>
-                              </div>
-                            </div>
-                            <div className="flex items-center text-gray-600 mb-4">
-                              <User className="h-4 w-4 mr-2" />
-                              <span>{result.totalExperience || "Not specified"} experience</span>
-                              {result.degree && (
-                                <>
-                                  <span className="mx-2">•</span>
-                                  <GraduationCap className="h-4 w-4 mr-1" />
-                                  <span>{result.degree}</span>
-                                </>
-                              )}
-                              {result.noticePeriod && (
-                                <>
-                                  <span className="mx-2">•</span>
-                                  <Clock className="h-4 w-4 mr-1" />
-                                  <span>{result.noticePeriod} notice</span>
-                                </>
-                              )}
-                            </div>
-                            {/* Contact Info */}
-                            <div className="flex items-center space-x-4 text-sm text-gray-500 mb-4">
-                              <div className="flex items-center">
-                                <Mail className="h-4 w-4 mr-1" />
-                                <span>{result.email || "Not provided"}</span>
-                              </div>
-                              <div className="flex items-center">
-                                <Phone className="h-4 w-4 mr-1" />
-                                <span>{result.phone || "Not provided"}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <Button variant="outline" onClick={() => openPreview(result)}>
-                            <Eye className="h-4 w-4 mr-2" />
-                            View Details
-                          </Button>
-                          {result.fileUrl && (
-                            <Button variant="outline" asChild>
-                              <a href={result.fileUrl} download={result.fileName}>
-                                <Download className="h-4 w-4 mr-2" />
-                                Download
-                              </a>
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Skills Preview */}
-                      <div className="space-y-3">
-                        <div>
-                          <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center">
-                            <Code className="h-4 w-4 mr-1" />
-                            Technical Skills:
-                          </h4>
-                          <div className="flex flex-wrap gap-1">
-                            {(result.technicalSkills || []).slice(0, 8).map((skill, skillIndex) => (
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <h3 className="font-bold text-gray-900 text-base">{result.name}</h3>
                               <Badge
-                                key={`${result._id || result.id}-skill-${skillIndex}`}
-                                variant={
-                                  (result.matchingKeywords || []).includes(skill.toLowerCase())
-                                    ? "default"
-                                    : "secondary"
-                                }
-                                className={`text-xs ${
-                                  (result.matchingKeywords || []).includes(skill.toLowerCase())
-                                    ? "bg-blue-100 text-blue-800 border-blue-200"
-                                    : ""
-                                }`}
+                                variant="secondary"
+                                className={`${getMatchColor(result.relevanceScore)} text-xs px-1.5 py-0`}
                               >
-                                {skill}
+                                {result.matchPercentage}% Match
                               </Badge>
-                            ))}
-                            {(result.technicalSkills || []).length > 8 && (
-                              <Badge variant="outline" className="text-xs">
-                                +{(result.technicalSkills || []).length - 8} more
-                              </Badge>
-                            )}
+                            </div>
+                            <div className="flex items-center text-sm text-gray-600 mt-0.5">
+                              <Briefcase className="h-3 w-3 mr-1" />
+                              <span className="font-medium mr-2 truncate max-w-[180px]" title={result.currentRole}>{result.currentRole}</span>
+                              
+                              <Building className="h-3 w-3 mr-1 ml-1" />
+                              <span className="" title={result.currentCompany || "N/A"}>{result.currentCompany || "N/A"}</span>
+                              
+                              <MapPin className="h-3 w-3 mr-1 ml-3" />
+                              <span className="truncate max-w-[120px]" title={result.location}>{result.location}</span>
+                            </div>
+                            
+                            <div className="flex items-center text-xs text-gray-500 mt-1.5 space-x-3">
+                                <span className="flex items-center"><Clock className="h-3 w-3 mr-1" /> {result.totalExperience} Exp</span>
+                                {result.degree && <span className="flex items-center"><GraduationCap className="h-3 w-3 mr-1" /> {result.degree}</span>}
+                                <span className="flex items-center"><Mail className="h-3 w-3 mr-1" /> {result.email || "N/A"}</span>
+                                <span className="flex items-center"><Phone className="h-3 w-3 mr-1" /> {result.phone || "N/A"}</span>
+                            </div>
                           </div>
                         </div>
-
-                        {/* Languages */}
-                        {(result.languagesKnown || []).length > 0 && (
-                          <div>
-                            <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center">
-                              <Languages className="h-4 w-4 mr-1" />
-                              Languages:
-                            </h4>
-                            <div className="flex flex-wrap gap-1">
-                              {(result.languagesKnown || []).map((language, langIndex) => (
-                                <Badge key={`${result._id || result.id}-lang-${langIndex}`} variant="outline" className="text-xs">
-                                  {language}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Matching Keywords */}
-                        {(result.matchingKeywords || []).length > 0 && (
-                          <div>
-                            <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center">
-                              <TrendingUp className="h-4 w-4 mr-1" />
-                              Matching Keywords:
-                            </h4>
-                            <div className="flex flex-wrap gap-1">
-                              {(result.matchingKeywords || []).map((keyword, keywordIndex) => (
-                                <Badge
-                                  key={`${result._id || result.id}-keyword-${keywordIndex}`}
-                                  variant="default"
-                                  className="text-xs bg-green-100 text-green-700 border-green-200"
-                                >
-                                  {keyword}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                        
+                        <div className="flex flex-col space-y-2">
+                            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={(e) => {
+                                e.stopPropagation();
+                                openPreview(result);
+                            }}>
+                                <Eye className="h-3 w-3 mr-1" /> View Profile
+                            </Button>
+                            {result.fileUrl && (
+                                <Button variant="ghost" size="sm" className="h-7 text-xs text-gray-500" asChild onClick={(e) => e.stopPropagation()}>
+                                    <a href={result.fileUrl} target="_blank" rel="noopener noreferrer">
+                                        <Eye className="h-3 w-3 mr-1" /> View Resume
+                                    </a>
+                                </Button>
+                            )}
+                        </div>
                       </div>
+
+                      {/* AI Match Analysis (Compact) */}
+                      {((result.matchDetails && result.matchDetails.length > 0) || result.matchSummary) && (
+                        <div className="mt-2 pt-2 border-t border-gray-100 bg-gray-50/30 p-2 rounded">
+                          
+                          {/* AI Insight Summary */}
+                          {result.matchSummary && (
+                              <div className="mb-2 text-xs text-gray-700 bg-purple-50/50 p-2 rounded border border-purple-100">
+                                  <span className="font-bold text-purple-700 mr-1">AI Insight:</span>
+                                  {result.matchSummary}
+                              </div>
+                          )}
+
+                          {/* Score Bars (Compact) */}
+                          {result.scoreBreakdown && (
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
+                              {Object.entries(result.scoreBreakdown).map(([key, data]) => (
+                                <div key={key} className="flex items-center text-[10px] w-[140px]">
+                                  <span className="w-16 font-medium text-gray-500 truncate">{key}</span>
+                                  <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden mx-1">
+                                    <div 
+                                      className={`h-full rounded-full ${
+                                        data.percentage > 80 ? 'bg-green-500' : 
+                                        data.percentage > 40 ? 'bg-yellow-500' : 'bg-red-400'
+                                      }`} 
+                                      style={{ width: `${data.percentage}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-gray-400">{data.earned}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Key Matches & Gaps (Original Vertical Layout) */}
+                          <div className="mt-2 space-y-2">
+                            <div>
+                              {result.matchDetails?.filter(d => d.status === 'match').length ? (
+                                <div className="text-sm text-green-700">
+                                  <span className="font-semibold mr-1">✓ Matched:</span>
+                                  {result.matchDetails.filter(d => d.status === 'match').map(d => d.category).join(', ')}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div>
+                              {(result.gapAnalysis && result.gapAnalysis.length > 0) || result.matchDetails?.some(d => d.status === 'miss') ? (
+                                <div className="text-sm text-red-700">
+                                  <span className="font-semibold mr-1">✗ Missing:</span>
+                                  {Array.from(new Set([
+                                    ...(result.gapAnalysis || []),
+                                    ...(result.matchDetails?.filter(d => d.status === 'miss').map(d => d.category) || [])
+                                  ])).join(', ')}
+                                </div>
+                              ) : (
+                                <div className="text-sm text-gray-400 italic">No major gaps</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -1817,16 +1734,16 @@ export function SmartSearch() {
                       Page {currentPageSafe} of {totalPages} • Showing {startIdx + 1}-{Math.min(endIdx, totalResults)} of {totalResults}
                     </span>
                     <div className="flex items-center gap-2">
-                      <Button variant="outline" size="sm" disabled={currentPageSafe <= 1} onClick={() => setCurrentPage(1)}>
+                      <Button variant="outline" size="sm" disabled={currentPageSafe <= 1} onClick={() => executeSearch(1, lastSearchParams)}>
                         First
                       </Button>
-                      <Button variant="outline" size="sm" disabled={currentPageSafe <= 1} onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}>
+                      <Button variant="outline" size="sm" disabled={currentPageSafe <= 1} onClick={() => executeSearch(Math.max(1, currentPageSafe - 1), lastSearchParams)}>
                         Prev
                       </Button>
-                      <Button variant="outline" size="sm" disabled={currentPageSafe >= totalPages} onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}>
+                      <Button variant="outline" size="sm" disabled={currentPageSafe >= totalPages} onClick={() => executeSearch(Math.min(totalPages, currentPageSafe + 1), lastSearchParams)}>
                         Next
                       </Button>
-                      <Button variant="outline" size="sm" disabled={currentPageSafe >= totalPages} onClick={() => setCurrentPage(totalPages)}>
+                      <Button variant="outline" size="sm" disabled={currentPageSafe >= totalPages} onClick={() => executeSearch(totalPages, lastSearchParams)}>
                         Last
                       </Button>
                     </div>

@@ -43,6 +43,14 @@ interface CandidateContextType {
   total: number
   setPage: (page: number) => void
   setPageSize: (size: number) => void
+  searchQuery: string
+  setSearchQuery: (query: string) => void
+  statusFilter: string
+  setStatusFilter: (status: string) => void
+  sortBy: string
+  setSortBy: (sort: string) => void
+  sortOrder: 'asc' | 'desc'
+  setSortOrder: (order: 'asc' | 'desc') => void
   refreshCandidates: () => Promise<void>
   loadMoreCandidates: () => Promise<void>
   lastFetched: Date | null
@@ -56,14 +64,18 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const [hasMore, setHasMore] = useState(false)
   const [lastFetched, setLastFetched] = useState<Date | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(50)
   const [total, setTotal] = useState(0)
+  const [searchQuery, setSearchQueryState] = useState("")
+  const [statusFilter, setStatusFilterState] = useState("all")
+  const [sortBy, setSortByState] = useState("uploaded_at")
+  const [sortOrder, setSortOrderState] = useState<'asc' | 'desc'>("desc")
 
   const fetchCandidates = useCallback(async (page = currentPage, perPage = pageSize) => {
     try {
       setIsLoading(true)
-      logger.info(`Fetching candidates from API (paginated): page=${page} perPage=${perPage}`)
-      const url = `/api/candidates?paginate=true&page=${page}&perPage=${perPage}`
+      logger.info(`Fetching candidates from API (paginated): page=${page} perPage=${perPage} search=${searchQuery} status=${statusFilter} sort=${sortBy}:${sortOrder}`)
+      const url = `/api/candidates?paginate=true&page=${page}&perPage=${perPage}&search=${encodeURIComponent(searchQuery)}&status=${encodeURIComponent(statusFilter)}&sortBy=${encodeURIComponent(sortBy)}&sortOrder=${encodeURIComponent(sortOrder)}`
       const response = await fetch(url)
       if (response.ok) {
         const data = await response.json()
@@ -92,7 +104,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false)
     }
-  }, [pageSize])
+  }, [pageSize, searchQuery, statusFilter, sortBy, sortOrder])
 
   const refreshCandidates = useCallback(async () => {
     logger.info("Refreshing candidates...")
@@ -122,6 +134,28 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     setCurrentPage(page)
   }
 
+  const setSearchQuery = useCallback((query: string) => {
+    logger.info(`Search query changed to: "${query}", resetting to page 1`)
+    setSearchQueryState(query)
+    // Reset to page 1 when search changes to show results from beginning
+    setCurrentPage(1)
+  }, [])
+
+  const setStatusFilter = useCallback((status: string) => {
+    setStatusFilterState(status)
+    setCurrentPage(1)
+  }, [])
+
+  const setSortBy = useCallback((sort: string) => {
+    setSortByState(sort)
+    setCurrentPage(1)
+  }, [])
+
+  const setSortOrder = useCallback((order: 'asc' | 'desc') => {
+    setSortOrderState(order)
+    setCurrentPage(1)
+  }, [])
+
   const value = {
     candidates,
     isLoading,
@@ -131,6 +165,14 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     total,
     setPage,
     setPageSize,
+    searchQuery,
+    setSearchQuery,
+    statusFilter,
+    setStatusFilter,
+    sortBy,
+    setSortBy,
+    sortOrder,
+    setSortOrder,
     refreshCandidates,
     loadMoreCandidates,
     lastFetched,

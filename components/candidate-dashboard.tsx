@@ -55,12 +55,19 @@ export function CandidateDashboard() {
     pageSize,
     total,
     setPage,
+    setPageSize,
+    searchQuery,
+    setSearchQuery,
+    statusFilter,
+    setStatusFilter,
+    sortBy,
+    setSortBy,
+    sortOrder,
+    setSortOrder,
   } = useCandidates()
   
-  const [filteredCandidates, setFilteredCandidates] = useState<Candidate[]>([])
-  const [searchTerm, setSearchTerm] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [sortBy, setSortBy] = useState<string>("recent")
+  // Local search term for input field (debounced sync to context)
+  const [localSearchTerm, setLocalSearchTerm] = useState(searchQuery)
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null)
   const [mounted, setMounted] = useState(false)
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
@@ -70,64 +77,55 @@ export function CandidateDashboard() {
   const [updatingStatuses, setUpdatingStatuses] = useState<Set<string>>(new Set())
   const { toast } = useToast()
 
+  // Manual search handler
+  const handleSearch = () => {
+    setSearchQuery(localSearchTerm)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSearch()
+    }
+  }
+
+  // Sync context search query to local (in case it's cleared elsewhere)
+  useEffect(() => {
+    if (searchQuery !== localSearchTerm) {
+      setLocalSearchTerm(searchQuery)
+    }
+  }, [searchQuery]) // Don't include localSearchTerm to avoid loop
+
+  // Handle Sort Change
+  const handleSortChange = (value: string) => {
+    switch (value) {
+      case "recent":
+        setSortBy("uploaded_at")
+        setSortOrder("desc")
+        break
+      case "name":
+        setSortBy("name")
+        setSortOrder("asc")
+        break
+      case "status":
+        setSortBy("status")
+        setSortOrder("asc")
+        break
+      default:
+        setSortBy("uploaded_at")
+        setSortOrder("desc")
+    }
+  }
+
+  // Determine current sort value for UI
+  const getCurrentSortValue = () => {
+    if (sortBy === "name") return "name"
+    if (sortBy === "status") return "status"
+    return "recent" // default
+  }
+
   useEffect(() => {
     setMounted(true)
   }, [])
-
-  const filterCandidates = useCallback(() => {
-    logger.debug("Filtering candidates:", { 
-      totalCandidates: candidates.length, 
-      searchTerm, 
-      statusFilter,
-      sortBy
-    })
-    
-    let filtered = candidates
-
-    if (searchTerm) {
-      filtered = filtered.filter(
-        (candidate) =>
-          candidate.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          candidate.currentRole.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          candidate.location.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          candidate.technicalSkills.some((skill) => skill.toLowerCase().includes(searchTerm.toLowerCase())) ||
-          candidate.currentCompany?.toLowerCase().includes(searchTerm.toLowerCase()),
-      )
-    }
-
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((candidate) => candidate.status === statusFilter)
-    }
-
-    // Apply sorting
-    filtered = [...filtered].sort((a, b) => {
-      switch (sortBy) {
-        case "recent":
-          // Sort by upload date (newest first) - this should already be the default from API
-          const dateA = new Date(a.uploadedAt || 0).getTime()
-          const dateB = new Date(b.uploadedAt || 0).getTime()
-          return dateB - dateA
-        case "name":
-          // Sort by name A-Z
-          return (a.name || "").localeCompare(b.name || "")
-        case "status":
-          // Sort by status
-          return (a.status || "").localeCompare(b.status || "")
-        default:
-          return 0
-      }
-    })
-
-    logger.info("Filtered and sorted candidates:", filtered.length)
-    setFilteredCandidates(filtered)
-  }, [candidates, searchTerm, statusFilter, sortBy])
-
-  useEffect(() => {
-    if (mounted) {
-      logger.debug("Component mounted, filtering candidates...")
-      filterCandidates()
-    }
-  }, [mounted, filterCandidates])
 
   // Auto-refresh candidates every time the component is accessed
   useEffect(() => {
@@ -141,11 +139,10 @@ export function CandidateDashboard() {
   useEffect(() => {
     logger.debug("Candidates state updated:", {
       candidatesCount: candidates.length,
-      filteredCount: filteredCandidates.length,
       isLoading,
       mounted
     })
-  }, [candidates, filteredCandidates, isLoading, mounted])
+  }, [candidates, isLoading, mounted])
 
   const updateCandidateStatus = async (candidateId: string, newStatus: string) => {
     try {
@@ -359,7 +356,7 @@ export function CandidateDashboard() {
   }
 
   const fixAllCandidates = async () => {
-    const candidatesWithIssues = filteredCandidates.filter(hasParsingIssues)
+    const candidatesWithIssues = candidates.filter(hasParsingIssues)
     const candidatesThatCanReparse = candidatesWithIssues.filter(canReparse)
     const candidatesThatCannotReparse = candidatesWithIssues.filter(c => !canReparse(c))
     
@@ -551,11 +548,7 @@ export function CandidateDashboard() {
   return (
     <div className="space-y-6">
       {/* Enhanced Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-4 sm:space-y-0">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Candidate Database</h2>
-          <p className="text-gray-600">Manage and review all uploaded candidates</p>
-        </div>
+      <div className="flex flex-col sm:flex-row justify-end items-start sm:items-center space-y-4 sm:space-y-0">
         <div className="flex items-center space-x-2">
           <Button 
             variant="outline" 
@@ -580,14 +573,18 @@ export function CandidateDashboard() {
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                placeholder="Search by name, role, company, location, or skills..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
-              />
+            <div className="flex flex-1 gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <Input
+                  placeholder="Search by name, role, company, location, or skills..."
+                  value={localSearchTerm}
+                  onChange={(e) => setLocalSearchTerm(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  className="pl-10"
+                />
+              </div>
+              <Button onClick={handleSearch}>Search</Button>
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-full sm:w-48">
@@ -605,21 +602,66 @@ export function CandidateDashboard() {
                 <SelectItem value="on-hold">On Hold</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={pageSize.toString()} onValueChange={(value) => { setPageSize(parseInt(value)); setPage(1); }}>
+              <SelectTrigger className="w-full sm:w-32">
+                <SelectValue placeholder="Rows per page" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="50">50 rows</SelectItem>
+                <SelectItem value="100">100 rows</SelectItem>
+                <SelectItem value="500">500 rows</SelectItem>
+                <SelectItem value="1000">1000 rows</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
+
+      {/* Top Pagination Controls */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm text-gray-600">
+          Page <span className="font-medium">{currentPage}</span> of <span className="font-medium">{Math.max(1, Math.ceil(total / pageSize))}</span>
+        </div>
+        <Pagination>
+          <PaginationContent>
+            <PaginationItem>
+              <PaginationPrevious href="#" onClick={(e) => { e.preventDefault(); if (currentPage > 1) setPage(currentPage - 1) }} />
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationLink href="#" isActive>
+                {currentPage}
+              </PaginationLink>
+            </PaginationItem>
+            {currentPage + 1 <= Math.max(1, Math.ceil(total / pageSize)) && (
+              <PaginationItem>
+                <PaginationLink href="#" onClick={(e) => { e.preventDefault(); setPage(currentPage + 1) }}>
+                  {currentPage + 1}
+                </PaginationLink>
+              </PaginationItem>
+            )}
+            {currentPage + 2 <= Math.max(1, Math.ceil(total / pageSize)) && (
+              <PaginationItem>
+                <PaginationEllipsis />
+              </PaginationItem>
+            )}
+            <PaginationItem>
+              <PaginationNext href="#" onClick={(e) => { e.preventDefault(); const totalPages = Math.max(1, Math.ceil(total / pageSize)); if (currentPage < totalPages) setPage(currentPage + 1) }} />
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
+      </div>
 
       {/* Results Summary */}
       <div className="flex justify-between items-center">
         <div className="space-y-2">
           <p className="text-sm text-gray-600">
-            Showing <span className="font-medium">{filteredCandidates.length}</span> of{" "}
+            Showing <span className="font-medium">{candidates.length}</span> of{" "}
             <span className="font-medium">{total}</span> candidates
           </p>
           {(() => {
-            const issuesCount = filteredCandidates.filter(hasParsingIssues).length
-            const canReparseCount = filteredCandidates.filter(hasParsingIssues).filter(canReparse).length
-            const cannotReparseCount = filteredCandidates.filter(hasParsingIssues).filter(c => !canReparse(c)).length
+            const issuesCount = candidates.filter(hasParsingIssues).length
+            const canReparseCount = candidates.filter(hasParsingIssues).filter(canReparse).length
+            const cannotReparseCount = candidates.filter(hasParsingIssues).filter(c => !canReparse(c)).length
             
             if (issuesCount > 0) {
               return (
@@ -659,10 +701,10 @@ export function CandidateDashboard() {
             return null
           })()}
         </div>
-        {filteredCandidates.length > 0 && (
+        {candidates.length > 0 && (
           <div className="flex items-center space-x-2 text-sm text-gray-500">
             <span>Sort by:</span>
-            <Select value={sortBy} onValueChange={setSortBy}>
+            <Select value={getCurrentSortValue()} onValueChange={handleSortChange}>
               <SelectTrigger className="w-32 h-8">
                 <SelectValue />
               </SelectTrigger>
@@ -677,7 +719,7 @@ export function CandidateDashboard() {
       </div>
 
       {/* Candidates Display */}
-      {filteredCandidates.length === 0 ? (
+      {candidates.length === 0 ? (
         <Card>
           <CardContent className="p-12 text-center">
             <User className="h-16 w-16 text-gray-300 mx-auto mb-4" />
@@ -715,7 +757,7 @@ export function CandidateDashboard() {
         </Card>
       ) : viewMode === "grid" ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredCandidates.map((candidate, index) => (
+            {candidates.map((candidate, index) => (
               <Card 
                 key={`${candidate._id}-${index}`}
                 className="hover:shadow-lg transition-all duration-300 group max-w-sm"
@@ -867,7 +909,7 @@ export function CandidateDashboard() {
       ) : (
         // List View
                   <div className="space-y-4">
-            {filteredCandidates.map((candidate, index) => (
+            {candidates.map((candidate, index) => (
               <Card 
                 key={`${candidate._id}-${index}`}
                 className="hover:shadow-md transition-shadow"

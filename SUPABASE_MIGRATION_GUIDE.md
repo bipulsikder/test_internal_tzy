@@ -504,3 +504,4 @@ npm uninstall googleapis @vercel/blob
 ---
 
 **Need Help?** If you encounter any issues during migration, refer to the troubleshooting section or reach out to the Supabase community for support.
+

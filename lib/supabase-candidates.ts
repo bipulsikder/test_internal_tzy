@@ -128,54 +128,6 @@ export class SupabaseCandidateService {
       parsing_method: 'gemini', // Default to gemini
       parsing_confidence: 0.95, // Default confidence
       parsing_errors: [],
-      embedding: (candidate as any).embedding || null, // Add embedding support
-    } as any
-  }
-
-  // Search candidates using vector similarity
-  static async searchCandidatesByEmbedding(embedding: number[], matchThreshold = 0.5, matchCount = 20): Promise<ComprehensiveCandidateData[]> {
-    try {
-      const { data, error } = await supabase
-        .rpc('match_candidates', {
-          query_embedding: embedding,
-          match_threshold: matchThreshold,
-          match_count: matchCount
-        })
-
-      if (error) {
-        console.error('Error searching candidates by embedding:', error)
-        throw error
-      }
-
-      // Get full candidate data for search results
-      const candidateIds = (data || []).map((result: any) => result.id)
-      
-      if (candidateIds.length === 0) {
-        return []
-      }
-
-      const { data: candidates, error: candidatesError } = await supabase
-        .from('candidates')
-        .select('*')
-        .in('id', candidateIds)
-
-      if (candidatesError) {
-        console.error('Error fetching vector search results:', candidatesError)
-        throw candidatesError
-      }
-
-      // Map candidates and attach relevance scores from vector search
-      return (candidates || []).map(row => {
-        const candidate = this.mapRowToCandidate(row);
-        const match = data.find((r: any) => r.id === row.id);
-        if (match) {
-          (candidate as any).vectorScore = match.similarity;
-        }
-        return candidate;
-      });
-    } catch (error) {
-      console.error('Failed to search candidates by embedding:', error)
-      return []
     }
   }
 
@@ -337,13 +289,15 @@ export class SupabaseCandidateService {
     perPage?: number,
     sortBy?: string,
     sortOrder?: 'asc' | 'desc',
-    search?: string
+    search?: string,
+    status?: string
   } = {}): Promise<{ items: ComprehensiveCandidateData[], total: number, page: number, perPage: number }> {
     const page = Math.max(1, options.page ?? 1)
     const perPage = Math.min(200, Math.max(1, options.perPage ?? 20))
     const sortBy = options.sortBy ?? 'uploaded_at'
     const sortOrder = options.sortOrder ?? 'desc'
     const search = (options.search ?? '').trim()
+    const status = options.status ?? 'all'
 
     const from = (page - 1) * perPage
     const to = from + perPage - 1
@@ -351,17 +305,47 @@ export class SupabaseCandidateService {
     try {
       let query = supabase
         .from('candidates')
-        .select('*', { count: 'estimated' })
+        .select('*', { count: 'exact' })
         .order(sortBy, { ascending: sortOrder === 'asc' })
 
-      if (search) {
-        // Basic OR filter across common text columns
-        const term = `%${search}%`
-        query = query.or(
-          `name.ilike.${term},location.ilike.${term},current_role.ilike.${term},desired_role.ilike.${term},summary.ilike.${term}`
-        )
+      // Apply status filter if not 'all'
+      if (status && status !== 'all') {
+        query = query.eq('status', status)
       }
 
+      if (search) {
+        // Comprehensive search across all relevant text fields
+        // This searches the ENTIRE database, not just the current page
+        // Note: JSONB fields are included in search_vector for full-text search
+        // but we can't use ::text casting in PostgREST .or() filters
+        const searchTerm = `%${search.trim()}%`
+        
+        // Build search conditions for all searchable text fields
+        // These fields cover most searchable content:
+        // - Personal info: name, email, phone
+        // - Professional: current_role, desired_role, current_company
+        // - Location: location
+        // - Education: university, degree
+        // - Content: summary, resume_text (includes most JSONB data when parsed)
+        const searchConditions = [
+          `name.ilike.${searchTerm}`,
+          `location.ilike.${searchTerm}`,
+          `current_role.ilike.${searchTerm}`,
+          `desired_role.ilike.${searchTerm}`,
+          `summary.ilike.${searchTerm}`,
+          `current_company.ilike.${searchTerm}`,
+          `email.ilike.${searchTerm}`,
+          `phone.ilike.${searchTerm}`,
+          `resume_text.ilike.${searchTerm}`, // Contains most candidate data including skills
+          `university.ilike.${searchTerm}`,
+          `degree.ilike.${searchTerm}`
+        ]
+        
+        // Apply OR filter - searches across ALL candidates in database before pagination
+        query = query.or(searchConditions.join(','))
+      }
+
+      // IMPORTANT: Apply range (pagination) AFTER filters to ensure we search entire database first
       const { data, error, count } = await query.range(from, to)
 
       if (error) {
@@ -887,6 +871,66 @@ export class SupabaseCandidateService {
     }
   }
 
+  // Search candidates by embedding (vector search)
+  static async searchCandidatesByEmbedding(embedding: number[], threshold: number = 0.6, limit: number = 50): Promise<ComprehensiveCandidateData[]> {
+    try {
+      if (!embedding || embedding.length === 0) {
+        console.warn('Empty embedding provided for vector search')
+        return []
+      }
+
+      // Call the match_candidates function - Supabase will handle vector conversion
+      const { data, error } = await supabase
+        .rpc('match_candidates', {
+          query_embedding: embedding,
+          match_threshold: threshold,
+          match_count: limit
+        })
+
+      if (error) {
+        console.error('Error in vector search:', error)
+        return []
+      }
+
+      if (!data || data.length === 0) {
+        return []
+      }
+
+      // Extract candidate IDs and sort by similarity
+      const candidateIds = data.map((result: any) => result.id)
+      const similarityMap = new Map(data.map((r: any) => [r.id, r.similarity]))
+
+      // Fetch full candidate data
+      const { data: candidates, error: candidatesError } = await supabase
+        .from('candidates')
+        .select('*')
+        .in('id', candidateIds)
+
+      if (candidatesError) {
+        console.error('Error fetching vector search results:', candidatesError)
+        throw candidatesError
+      }
+
+      // Map to ComprehensiveCandidateData and preserve similarity score
+      const results = (candidates || []).map(row => {
+        const candidate = this.mapRowToCandidate(row)
+        // Attach similarity score for relevance ranking
+        ;(candidate as any).vectorSimilarity = similarityMap.get(row.id) || 0
+        return candidate
+      })
+
+      // Sort by similarity (highest first)
+      return results.sort((a, b) => {
+        const simA = (a as any).vectorSimilarity || 0
+        const simB = (b as any).vectorSimilarity || 0
+        return simB - simA
+      })
+    } catch (error) {
+      console.error('Failed to search candidates by embedding:', error)
+      return []
+    }
+  }
+
   // Get analytics/statistics
   static async getAnalytics(period = "all"): Promise<any> {
     try {
@@ -1064,3 +1108,4 @@ export class SupabaseCandidateService {
     }
   }
 }
+

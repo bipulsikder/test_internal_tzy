@@ -90,8 +90,6 @@ export default function BulkImportUrls() {
       toast.error('Connection failed');
       setRunning(false);
     }
-
-
   };
 
   const downloadCsv = () => {

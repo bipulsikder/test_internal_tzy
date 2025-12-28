@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { supabase, supabaseAdmin } from './supabase'
 
 /**
  * Check if a file exists in Supabase Storage by name or path
@@ -9,8 +9,8 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
   try {
     console.log(`Checking if file exists in Supabase storage: ${fileName}`)
     
-    // List all files in the bucket
-    const { data: files, error } = await supabase.storage
+    // List all files in the bucket using admin client to bypass RLS
+    const { data: files, error } = await supabaseAdmin.storage
       .from('resume-files')
       .list()
     
@@ -34,7 +34,7 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
       console.log(`✅ File already exists in Supabase storage: ${existingFile.name}`)
       
       // Get the public URL
-      const { data: { publicUrl } } = supabase.storage
+      const { data: { publicUrl } } = supabaseAdmin.storage
         .from('resume-files')
         .getPublicUrl(existingFile.name)
       
@@ -56,21 +56,16 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
 
 /**
  * Upload a file to Supabase Storage
- * @param file The file to upload
- * @param candidateId Optional candidate ID to include in the filename
+ * @param file The file or blob to upload
+ * @param fileName The filename to use in storage
  * @returns Object with url and path of the uploaded file
  */
-export async function uploadFileToSupabase(file: File, candidateId?: string): Promise<{ url: string; path: string }> {
+export async function uploadFileToSupabase(file: File | Blob, fileName: string): Promise<{ url: string; path: string }> {
   try {
-    console.log(`Uploading file to Supabase Storage: ${file.name}`)
+    console.log(`Uploading file to Supabase Storage: ${fileName}`)
     
-    // Generate a unique filename if candidateId is provided
-    const fileName = candidateId 
-      ? `${candidateId}-${file.name}` 
-      : `${Date.now()}-${file.name}`
-    
-    // Upload the file
-    const { data, error } = await supabase.storage
+    // Upload the file using admin client to bypass RLS policies
+    const { data, error } = await supabaseAdmin.storage
       .from('resume-files')
       .upload(fileName, file, {
         cacheControl: '3600',
@@ -83,7 +78,7 @@ export async function uploadFileToSupabase(file: File, candidateId?: string): Pr
     }
     
     // Get the public URL
-    const { data: { publicUrl } } = supabase.storage
+    const { data: { publicUrl } } = supabaseAdmin.storage
       .from('resume-files')
       .getPublicUrl(data.path)
     
@@ -110,8 +105,8 @@ export async function deleteFileFromSupabase(url: string): Promise<boolean> {
       path = url.split('resume-files/')[1]
     }
     
-    // Delete the file
-    const { error } = await supabase.storage
+    // Delete the file using admin client to bypass RLS
+    const { error } = await supabaseAdmin.storage
       .from('resume-files')
       .remove([path])
     

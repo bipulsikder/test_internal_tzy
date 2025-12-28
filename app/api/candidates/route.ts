@@ -15,12 +15,13 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const paginate = searchParams.get('paginate') === 'true'
     const page = Number(searchParams.get('page') ?? '1')
-    const perPage = Number(searchParams.get('perPage') ?? '20')
+    const perPage = Number(searchParams.get('perPage') ?? '50')
     const search = searchParams.get('search') ?? ''
+    const status = searchParams.get('status') ?? 'all'
     const sortBy = searchParams.get('sortBy') ?? 'uploaded_at'
     const sortOrder = (searchParams.get('sortOrder') as 'asc' | 'desc') ?? 'desc'
 
-    logger.info(`GET /api/candidates paginate=${paginate} page=${page} perPage=${perPage} search="${search}"`)
+    logger.info(`GET /api/candidates paginate=${paginate} page=${page} perPage=${perPage} search="${search}" status="${status}"`)
     logger.info(`Fetching candidates from Supabase${paginate ? ' (paginated)' : ''}`)
 
     if (paginate) {
@@ -30,6 +31,7 @@ export async function GET(request: NextRequest) {
         sortBy,
         sortOrder,
         search,
+        status,
       })
       logger.info(`Supabase returned: page=${page} perPage=${perPage} total=${total} rows=${items.length}`)
 
