@@ -230,18 +230,30 @@ export class SupabaseCandidateService {
       const candidateIds = candidates.map(c => c.id).filter((id): id is string => !!id)
       if (candidateIds.length > 0) {
         try {
-          const [{ data: workExps, error: workErr }, { data: educations, error: eduErr }] = await Promise.all([
-            supabase.from('work_experience').select('*').in('candidate_id', candidateIds),
-            supabase.from('education').select('*').in('candidate_id', candidateIds)
-          ])
+          const chunkSize = 200
+          const chunkedIds: string[][] = []
+          for (let i = 0; i < candidateIds.length; i += chunkSize) {
+            chunkedIds.push(candidateIds.slice(i, i + chunkSize))
+          }
 
-          if (workErr) console.warn('Work experience fetch (bulk) error:', workErr)
-          if (eduErr) console.warn('Education fetch (bulk) error:', eduErr)
+          let workExpsAll: any[] = []
+          let educationsAll: any[] = []
+
+          for (const chunk of chunkedIds) {
+            const [{ data: workExps, error: workErr }, { data: educations, error: eduErr }] = await Promise.all([
+              supabase.from('work_experience').select('*').in('candidate_id', chunk),
+              supabase.from('education').select('*').in('candidate_id', chunk)
+            ])
+            if (workErr) console.warn('Work experience fetch (bulk) error:', workErr)
+            if (eduErr) console.warn('Education fetch (bulk) error:', eduErr)
+            workExpsAll = workExpsAll.concat(workExps || [])
+            educationsAll = educationsAll.concat(educations || [])
+          }
 
           const workByCandidate = new Map<string, any[]>()
           const eduByCandidate = new Map<string, any[]>()
 
-          ;(workExps || []).forEach(exp => {
+          ;(workExpsAll || []).forEach(exp => {
             const cid = exp.candidate_id
             if (!workByCandidate.has(cid)) workByCandidate.set(cid, [])
             workByCandidate.get(cid)!.push({
@@ -252,7 +264,7 @@ export class SupabaseCandidateService {
             })
           })
 
-          ;(educations || []).forEach(edu => {
+          ;(educationsAll || []).forEach(edu => {
             const cid = edu.candidate_id
             if (!eduByCandidate.has(cid)) eduByCandidate.set(cid, [])
             eduByCandidate.get(cid)!.push({
@@ -573,6 +585,39 @@ export class SupabaseCandidateService {
     } catch (error) {
       console.error('Failed to add candidate:', error)
       throw error
+    }
+  }
+  
+  // Get candidate by email
+  static async getCandidateByEmail(email: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const normalized = email.trim()
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('email', normalized)
+        .single()
+      
+      if (error) {
+        // Fallback to case-insensitive search
+        const { data: list, error: listErr } = await supabase
+          .from('candidates')
+          .select('*')
+          .ilike('email', normalized)
+          .limit(1)
+        
+        if (listErr) {
+          return null
+        }
+        
+        const row = (list || [])[0]
+        if (!row) return null
+        return this.mapRowToCandidate(row)
+      }
+      
+      return data ? this.mapRowToCandidate(data) : null
+    } catch (e) {
+      return null
     }
   }
 
@@ -1108,4 +1153,3 @@ export class SupabaseCandidateService {
     }
   }
 }
-

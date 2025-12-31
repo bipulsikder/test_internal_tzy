@@ -81,8 +81,9 @@ export async function POST(request: NextRequest) {
       if (existingCandidate) {
         console.log("File is already associated with existing candidate:", existingCandidate.name)
         return NextResponse.json({
-          error: "Resume already exists",
+          success: true,
           isDuplicate: true,
+          message: "Resume already exists and is linked to an existing candidate",
           duplicateInfo: {
             existingName: existingCandidate.name,
             existingId: existingCandidate.id,
@@ -90,7 +91,7 @@ export async function POST(request: NextRequest) {
             reason: `File ${file.name} is already uploaded and associated with candidate ${existingCandidate.name}`,
             fileUrl: fileUrl
           }
-        }, { status: 409 })
+        })
       }
       
       // File exists in Supabase storage but not associated with any candidate - we can reuse it
@@ -161,16 +162,69 @@ export async function POST(request: NextRequest) {
         const duplicate = duplicateChecks[0]
         console.log("Duplicate resume detected:", duplicate)
         
+        const candidateId = duplicate.id
+        console.log("Uploading to Supabase Storage and updating existing candidate...")
+        fileUrl = await SupabaseCandidateService.uploadFile(file, candidateId)
+        filePath = fileUrl.split('/').pop() || ''
+
+        await SupabaseCandidateService.updateCandidate(candidateId, {
+          // Basic Information
+          name: parsedData.name,
+          email: parsedData.email || "",
+          phone: parsedData.phone || "",
+          dateOfBirth: parsedData.dateOfBirth || "",
+          gender: parsedData.gender || "",
+          maritalStatus: parsedData.maritalStatus || "",
+          currentRole: parsedData.currentRole || "Not specified",
+          desiredRole: parsedData.desiredRole || "",
+          currentCompany: parsedData.currentCompany || "",
+          location: parsedData.location || "Not specified",
+          preferredLocation: parsedData.preferredLocation || "",
+          totalExperience: parsedData.totalExperience || "Not specified",
+          currentSalary: parsedData.currentSalary || "",
+          expectedSalary: parsedData.expectedSalary || "",
+          noticePeriod: parsedData.noticePeriod || "",
+          highestQualification: parsedData.highestQualification || "",
+          degree: parsedData.degree || "",
+          specialization: parsedData.specialization || "",
+          university: parsedData.university || "",
+          educationYear: parsedData.educationYear || "",
+          educationPercentage: parsedData.educationPercentage || "",
+          additionalQualifications: parsedData.additionalQualifications || "",
+          technicalSkills: parsedData.technicalSkills || [],
+          softSkills: parsedData.softSkills || [],
+          languagesKnown: parsedData.languagesKnown || [],
+          certifications: parsedData.certifications || [],
+          previousCompanies: parsedData.previousCompanies || [],
+          jobTitles: parsedData.jobTitles || [],
+          workDuration: parsedData.workDuration || [],
+          keyAchievements: parsedData.keyAchievements || [],
+          workExperience: parsedData.workExperience || [],
+          education: parsedData.education || [],
+          // Additional Information
+          projects: parsedData.projects || [],
+          awards: parsedData.awards || [],
+          publications: parsedData.publications || [],
+          references: parsedData.references || [],
+          linkedinProfile: parsedData.linkedinProfile || "",
+          portfolioUrl: parsedData.portfolioUrl || "",
+          githubProfile: parsedData.githubProfile || "",
+          summary: parsedData.summary || "",
+          // File Information
+          resumeText: parsedData.resumeText,
+          fileName: file.name,
+          fileUrl: fileUrl,
+        })
+
+        console.log("=== Existing candidate updated successfully ===")
         return NextResponse.json({
-          error: "Resume already exists",
-          isDuplicate: true,
-          duplicateInfo: {
-            existingName: duplicate.name,
-            existingId: duplicate.id,
-            uploadedAt: duplicate.uploadedAt,
-            reason: `Candidate with ${duplicate.email ? 'email' : duplicate.phone ? 'phone' : 'name'} already exists in database`
-          }
-        }, { status: 409 })
+          success: true,
+          candidateId,
+          message: "Existing candidate updated with new resume",
+          fileUrl: fileUrl,
+          reusedExistingFile: false,
+          ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
+        })
       }
 
       // Generate a unique ID for the candidate
@@ -196,7 +250,7 @@ export async function POST(request: NextRequest) {
       const candidateData = {
         // Basic Information
         name: parsedData.name,
-        email: parsedData.email || "",
+        email: (parsedData.email && parsedData.email.trim()) ? parsedData.email.trim() : `${candidateId}@unknown.invalid`,
         phone: parsedData.phone || "",
         dateOfBirth: parsedData.dateOfBirth || "",
         gender: parsedData.gender || "",
@@ -242,16 +296,17 @@ export async function POST(request: NextRequest) {
         resumeText: parsedData.resumeText,
         fileName: file.name,
         fileUrl: fileUrl, // URL to access file in Supabase storage
+        filePath: filePath,
 
         // System Fields
-        status: "new",
+        status: "new" as const,
         tags: [],
         rating: undefined,
         notes: "",
         uploadedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         lastContacted: "",
-        interviewStatus: "not-scheduled",
+        interviewStatus: "not-scheduled" as const,
         feedback: "",
         
         // Parsing metadata
@@ -266,31 +321,34 @@ export async function POST(request: NextRequest) {
       try {
         await SupabaseCandidateService.addCandidate(candidateData)
       } catch (addError: any) {
-        // Handle duplicate email constraint violation
         if (addError?.code === '23505' && addError?.message?.includes('email')) {
-          console.log("Duplicate email detected during insert")
+          console.log("Duplicate email detected during insert, updating existing candidate")
           
-          // Try to find the existing candidate
-          const existingCandidates = await SupabaseCandidateService.getAllCandidates()
-          const existingCandidate = existingCandidates.find(c => 
-            c.email?.trim().toLowerCase() === parsedData.email?.trim().toLowerCase()
-          )
+          let existingCandidate = null as any
+          if (parsedData.email && parsedData.email.trim()) {
+            existingCandidate = await SupabaseCandidateService.getCandidateByEmail(parsedData.email.trim())
+          }
+          if (!existingCandidate) {
+            const existingCandidates = await SupabaseCandidateService.getAllCandidates()
+            existingCandidate = existingCandidates.find(c => 
+              c.email?.trim().toLowerCase() === parsedData.email?.trim().toLowerCase()
+            )
+          }
           
-          if (existingCandidate) {
+          if (existingCandidate?.id) {
+            await SupabaseCandidateService.updateCandidate(existingCandidate.id, {
+              ...candidateData
+            })
             return NextResponse.json({
-              error: "Resume already exists",
-              isDuplicate: true,
-              duplicateInfo: {
-                existingName: existingCandidate.name,
-                existingId: existingCandidate.id,
-                uploadedAt: existingCandidate.uploadedAt,
-                reason: `Candidate with email ${parsedData.email} already exists in database`
-              }
-            }, { status: 409 })
+              success: true,
+              candidateId: existingCandidate.id,
+              message: "Existing candidate updated with parsed data",
+              fileUrl: fileUrl,
+              reusedExistingFile: false,
+              ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
+            })
           }
         }
-        
-        // Re-throw if it's not a duplicate email error
         throw addError
       }
 
@@ -302,7 +360,7 @@ export async function POST(request: NextRequest) {
         message: "Resume processed successfully",
         fileUrl: fileUrl,
         reusedExistingFile: false,
-        ...parsedData,
+        ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
       })
     }
 
@@ -347,9 +405,9 @@ export async function POST(request: NextRequest) {
       
       const duplicateChecks = [
         // Check by exact email match (only if email exists)
-        emailToCheck ? existingCandidates.find(c => {
+        parsedData.email?.trim() ? existingCandidates.find(c => {
           const existingEmail = c.email?.trim()
-          return existingEmail && existingEmail.toLowerCase() === emailToCheck.toLowerCase()
+          return existingEmail && existingEmail.toLowerCase() === parsedData.email!.trim().toLowerCase()
         }) : null,
         // Check by name + phone combination
         parsedData.phone?.trim() ? existingCandidates.find(c => 
@@ -369,16 +427,60 @@ export async function POST(request: NextRequest) {
         const duplicate = duplicateChecks[0]
         console.log("Duplicate resume detected:", duplicate)
         
+        await SupabaseCandidateService.updateCandidate(duplicate.id, {
+          name: parsedData.name,
+          email: parsedData.email || "",
+          phone: parsedData.phone || "",
+          dateOfBirth: parsedData.dateOfBirth || "",
+          gender: parsedData.gender || "",
+          maritalStatus: parsedData.maritalStatus || "",
+          currentRole: parsedData.currentRole || "Not specified",
+          desiredRole: parsedData.desiredRole || "",
+          currentCompany: parsedData.currentCompany || "",
+          location: parsedData.location || "Not specified",
+          preferredLocation: parsedData.preferredLocation || "",
+          totalExperience: parsedData.totalExperience || "Not specified",
+          currentSalary: parsedData.currentSalary || "",
+          expectedSalary: parsedData.expectedSalary || "",
+          noticePeriod: parsedData.noticePeriod || "",
+          highestQualification: parsedData.highestQualification || "",
+          degree: parsedData.degree || "",
+          specialization: parsedData.specialization || "",
+          university: parsedData.university || "",
+          educationYear: parsedData.educationYear || "",
+          educationPercentage: parsedData.educationPercentage || "",
+          additionalQualifications: parsedData.additionalQualifications || "",
+          technicalSkills: parsedData.technicalSkills || [],
+          softSkills: parsedData.softSkills || [],
+          languagesKnown: parsedData.languagesKnown || [],
+          certifications: parsedData.certifications || [],
+          previousCompanies: parsedData.previousCompanies || [],
+          jobTitles: parsedData.jobTitles || [],
+          workDuration: parsedData.workDuration || [],
+          keyAchievements: parsedData.keyAchievements || [],
+          workExperience: parsedData.workExperience || [],
+          education: parsedData.education || [],
+          projects: parsedData.projects || [],
+          awards: parsedData.awards || [],
+          publications: parsedData.publications || [],
+          references: parsedData.references || [],
+          linkedinProfile: parsedData.linkedinProfile || "",
+          portfolioUrl: parsedData.portfolioUrl || "",
+          githubProfile: parsedData.githubProfile || "",
+          summary: parsedData.summary || "",
+          fileName: file.name,
+          fileUrl: fileUrl,
+        })
+
+        console.log("=== Existing candidate updated successfully (Reused File) ===")
         return NextResponse.json({
-          error: "Resume already exists",
-          isDuplicate: true,
-          duplicateInfo: {
-            existingName: duplicate.name,
-            existingId: duplicate.id,
-            uploadedAt: duplicate.uploadedAt,
-            reason: `Candidate with ${duplicate.email ? 'email' : duplicate.phone ? 'phone' : 'name'} already exists in database`
-          }
-        }, { status: 409 })
+          success: true,
+          candidateId: duplicate.id,
+          message: "Existing candidate updated with reused file",
+          fileUrl: fileUrl,
+          reusedExistingFile: true,
+          ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
+        })
       }
 
       // Generate embedding for vector search (optional)
@@ -448,14 +550,14 @@ export async function POST(request: NextRequest) {
         fileUrl: fileUrl,
 
         // System Fields
-        status: "new",
+        status: "new" as const,
         tags: [],
         rating: undefined,
         notes: "",
         uploadedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         lastContacted: "",
-        interviewStatus: "not-scheduled",
+        interviewStatus: "not-scheduled" as const,
         feedback: "",
         
         // Parsing metadata
@@ -505,7 +607,7 @@ export async function POST(request: NextRequest) {
         message: "Resume processed successfully (reused existing file)",
         fileUrl: fileUrl,
         reusedExistingFile: true,
-        ...parsedData,
+        ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
       })
       
     } catch (parseError) {
