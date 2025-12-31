@@ -84,6 +84,8 @@ export async function POST(request: NextRequest) {
           success: true,
           isDuplicate: true,
           message: "Resume already exists and is linked to an existing candidate",
+          updatedExisting: false,
+          resultType: "duplicate",
           duplicateInfo: {
             existingName: existingCandidate.name,
             existingId: existingCandidate.id,
@@ -128,6 +130,36 @@ export async function POST(request: NextRequest) {
             "Verify the file is not an image-only PDF"
           ],
           timestamp: new Date().toISOString()
+        }, { status: 422 })
+      }
+
+      // Validation: block storing incomplete profiles
+      const normalizedName = (parsedData.name || "").trim().toLowerCase()
+      const isNameInvalid = !normalizedName || normalizedName.length < 2 || normalizedName === "unknown" || normalizedName === "not specified"
+      const hasContact = !!(parsedData.email && parsedData.email.trim()) || !!(parsedData.phone && parsedData.phone.trim())
+      const hasContent = !!(parsedData.resumeText && parsedData.resumeText.trim().length > 100)
+      const isDocx = file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      const shouldBlock = isNameInvalid || (!hasContact && !hasContent)
+      if (shouldBlock) {
+        return NextResponse.json({
+          error: "Invalid or incomplete profile",
+          validationFailed: true,
+          reasons: {
+            nameInvalid: isNameInvalid,
+            missingContactOrContent: !hasContact && !hasContent,
+            fileType: file.type
+          },
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+          suggestions: [
+            "Ensure the resume contains a valid candidate name",
+            "Include an email or phone number in the resume",
+            "Upload a PDF for best parsing accuracy",
+            isDocx ? "Consider converting DOCX to PDF for improved parsing" : "Ensure text is selectable (not image-only)"
+          ],
+          timestamp: new Date().toISOString(),
+          resultType: "blocked",
         }, { status: 422 })
       }
 
@@ -223,6 +255,8 @@ export async function POST(request: NextRequest) {
           message: "Existing candidate updated with new resume",
           fileUrl: fileUrl,
           reusedExistingFile: false,
+          updatedExisting: true,
+          resultType: "updated",
           ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
         })
       }
@@ -360,6 +394,8 @@ export async function POST(request: NextRequest) {
         message: "Resume processed successfully",
         fileUrl: fileUrl,
         reusedExistingFile: false,
+        updatedExisting: false,
+        resultType: "created",
         ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
       })
     }
@@ -479,6 +515,8 @@ export async function POST(request: NextRequest) {
           message: "Existing candidate updated with reused file",
           fileUrl: fileUrl,
           reusedExistingFile: true,
+          updatedExisting: true,
+          resultType: "updated",
           ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
         })
       }
@@ -607,6 +645,8 @@ export async function POST(request: NextRequest) {
         message: "Resume processed successfully (reused existing file)",
         fileUrl: fileUrl,
         reusedExistingFile: true,
+        updatedExisting: false,
+        resultType: "created",
         ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
       })
       

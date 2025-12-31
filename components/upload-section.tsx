@@ -28,7 +28,7 @@ import { logger } from "@/lib/logger"
 
 interface UploadedFile {
   file: File
-  status: "uploading" | "processing" | "completed" | "error" | "duplicate" | "parsing-failed"
+  status: "uploading" | "processing" | "completed" | "error" | "duplicate" | "parsing-failed" | "blocked" | "created" | "updated"
   progress: number
   result?: any
   error?: string
@@ -184,19 +184,50 @@ export function UploadSection() {
           return
         }
         
+        // Validation failure (blocked)
+        if (result.validationFailed || result.resultType === "blocked") {
+          setUploadedFiles((prev) =>
+            prev.map((f, i) =>
+              i === index
+                ? {
+                    ...f,
+                    status: "blocked" as UploadedFile["status"],
+                    progress: 0,
+                    error: result.error || "Invalid or incomplete profile",
+                  }
+                : f,
+            ),
+          )
+          toast({
+            title: "Upload Blocked",
+            description: `Profile incomplete: ${result.error || "Invalid or incomplete profile"}`,
+            variant: "destructive",
+          })
+          return
+        }
+        
         throw new Error(result.error || result.details || `HTTP ${response.status}`)
       }
 
-      // Update status to completed
+      // Map success to created/updated based on API flags
+      const successStatus =
+        result.updatedExisting === true
+          ? "updated"
+          : result.resultType === "created"
+          ? "created"
+          : result.resultType === "duplicate"
+          ? "duplicate"
+          : "completed"
+      
       setUploadedFiles((prev) =>
-        prev.map((f, i) => (i === index ? { ...f, status: "completed", progress: 100, result } : f)),
+        prev.map((f, i) => (i === index ? { ...f, status: successStatus as UploadedFile["status"], progress: 100, result } : f)),
       )
 
       logger.info(`✅ Successfully processed: ${file.name}`)
 
       toast({
-        title: "Success",
-        description: `${file.name} processed successfully`,
+        title: result.updatedExisting ? "Updated Existing Profile" : "New Profile Created",
+        description: `${file.name} ${result.updatedExisting ? "updated existing candidate" : "created new candidate"}`,
       })
     } catch (error) {
       logger.error(`❌ Error processing ${file.name}:`, error)
@@ -255,10 +286,16 @@ export function UploadSection() {
         return <Sparkles className="h-4 w-4 animate-pulse text-purple-600" />
       case "completed":
         return <CheckCircle className="h-4 w-4 text-green-600" />
+      case "created":
+        return <CheckCircle className="h-4 w-4 text-green-600" />
+      case "updated":
+        return <RefreshCw className="h-4 w-4 text-indigo-600" />
       case "duplicate":
         return <FileCheck className="h-4 w-4 text-orange-600" />
       case "parsing-failed":
         return <AlertCircle className="h-4 w-4 text-red-600" />
+      case "blocked":
+        return <AlertTriangle className="h-4 w-4 text-red-600" />
       case "error":
         return <AlertCircle className="h-4 w-4 text-red-600" />
       default:
@@ -274,9 +311,15 @@ export function UploadSection() {
         return "border-purple-200 bg-purple-50"
       case "completed":
         return "border-green-200 bg-green-50"
+      case "created":
+        return "border-green-200 bg-green-50"
+      case "updated":
+        return "border-indigo-200 bg-indigo-50"
       case "duplicate":
         return "border-orange-200 bg-orange-50"
       case "parsing-failed":
+        return "border-red-200 bg-red-50"
+      case "blocked":
         return "border-red-200 bg-red-50"
       case "error":
         return "border-red-200 bg-red-50"
@@ -486,11 +529,13 @@ export function UploadSection() {
                   )}
 
                   {/* Success Result */}
-                  {uploadedFile.status === "completed" && uploadedFile.result && (
+                  {(uploadedFile.status === "completed" || uploadedFile.status === "created" || uploadedFile.status === "updated") && uploadedFile.result && (
                     <div className="mt-3 p-4 bg-green-50 rounded-lg border border-green-200">
                       <div className="flex items-center space-x-2 mb-3">
                         <CheckCircle className="h-5 w-5 text-green-600" />
-                        <span className="font-medium text-green-800">Successfully processed</span>
+                        <span className="font-medium text-green-800">
+                          {uploadedFile.status === "updated" ? "Updated Existing Profile" : "New Profile Created"}
+                        </span>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
                         <div>

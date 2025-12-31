@@ -2018,16 +2018,24 @@ async function extractTextFromFile(file: File): Promise<string> {
     }
     
     // Check for Word documents (DOCX, DOC)
-    if (fileType.includes("word") || 
-        fileType.includes("document") || 
-        fileType.includes("docx") || 
-        fileType.includes("doc") ||
-        fileName.endsWith('.docx') ||
-        fileName.endsWith('.doc')) {
-      console.log(`📝 Processing Word document: ${file.name} (${file.type})`)
+    if (
+      fileType.includes("word") ||
+      fileType.includes("document") ||
+      fileType.includes("docx") ||
+      fileName.endsWith(".docx")
+    ) {
+      console.log(`📝 Processing DOCX document: ${file.name} (${file.type})`)
       const arrayBuffer = await file.arrayBuffer()
       const text = await extractDocxText(arrayBuffer)
-      console.log("✅ Word document text extracted")
+      console.log("✅ DOCX text extracted")
+      return text
+    }
+    // Handle legacy .doc separately
+    if (fileType.includes("msword") || fileType.includes("doc") || fileName.endsWith(".doc")) {
+      console.log(`📝 Processing legacy DOC document: ${file.name} (${file.type})`)
+      const arrayBuffer = await file.arrayBuffer()
+      const text = await extractDocText(arrayBuffer)
+      console.log("✅ DOC text extracted (legacy)")
       return text
     }
     
@@ -2039,7 +2047,10 @@ async function extractTextFromFile(file: File): Promise<string> {
       const arrayBuffer = await file.arrayBuffer()
       
       if (fileName.endsWith('.docx') || fileName.endsWith('.doc')) {
-        return await extractDocxText(arrayBuffer)
+        if (fileName.endsWith('.docx')) {
+          return await extractDocxText(arrayBuffer)
+        }
+        return await extractDocText(arrayBuffer)
       } else if (fileName.endsWith('.pdf')) {
         return await extractPDFText(arrayBuffer)
       }
@@ -2055,6 +2066,45 @@ async function extractTextFromFile(file: File): Promise<string> {
     // Return a more helpful error message
     const errorMessage = error instanceof Error ? error.message : String(error)
     return `Error extracting text from ${file.name}: ${errorMessage}`
+  }
+}
+
+// Best-effort extraction for legacy .doc (binary) without external tools
+async function extractDocText(arrayBuffer: ArrayBuffer): Promise<string> {
+  try {
+    console.log("🔄 Starting DOC (legacy) text extraction...")
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      throw new Error("Invalid or empty ArrayBuffer")
+    }
+    const uint8 = new Uint8Array(arrayBuffer)
+    // Heuristic decode: try windows-1252 via TextDecoder fallback; if not, use latin1
+    let decoded = ""
+    try {
+      // Some environments support 'windows-1252'
+      const decoder = new TextDecoder("windows-1252" as any, { fatal: false })
+      decoded = decoder.decode(uint8)
+    } catch {
+      decoded = new TextDecoder("latin1").decode(uint8)
+    }
+    // Remove binary/control noise, collapse whitespace
+    let text = sanitizeExtractedText(decoded)
+    // Legacy DOC often embeds null bytes; strip remaining low ASCII
+    text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ")
+    // If still too short, extract ASCII word sequences as last resort
+    if (!text || text.length < 100) {
+      const ascii = Array.from(uint8)
+        .map((b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : " "))
+        .join("")
+      text = sanitizeExtractedText(ascii)
+    }
+    if (!text || text.length < 50) {
+      throw new Error("DOC processing produced insufficient text")
+    }
+    return text
+  } catch (error) {
+    console.error("❌ DOC legacy extraction failed:", error)
+    // Return an error marker so upstream can handle gracefully
+    return `DOC processing error: ${error instanceof Error ? error.message : String(error)}`
   }
 }
 
@@ -2689,6 +2739,5 @@ function cleanArray(value: any): string[] {
 }
 
 // Parse resume using OpenAI GPT-3.5-turbo (Free tier alternative)
-
 
 
