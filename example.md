@@ -43,3 +43,4 @@ this is expereince
 "[{"idx":0,"id":"00026426-719a-45b7-b5ee-f4f7cd62ef9e","candidate_id":"00c2431a-fc6d-4ff9-8c1a-8ca80d6d1582","company":"Udaan Logistics Pvt.Ltd.","role":"Hub Executive","duration":"3 years","location":null,"description":"","responsibilities":null,"achievements":null,"technologies":"[]","start_date":null,"end_date":null,"is_current":false,"created_at":"2025-11-23 09:32:42.947201+00"}]"
 
 so with that make the error fix though the error is showing embedding error education expereince errror accroding to that fix that so that i can upload the resume 
+
