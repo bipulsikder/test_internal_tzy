@@ -3,7 +3,7 @@ import { emailRegex, phoneRegex } from "./regexPatterns"
 import pdfParse from "pdf-parse"
 import mammoth from "mammoth"
 import JSZip from "jszip"
-import { ComprehensiveCandidateData } from "./google-sheets"
+import { ComprehensiveCandidateData } from "./types"
 import axios from "axios"
 
 const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null
@@ -519,8 +519,8 @@ Return ONLY the JSON object:`
           currentCompany: candidateData.currentCompany,
           location: candidateData.location,
           totalExperience: candidateData.totalExperience,
-          technicalSkills: candidateData.technicalSkills.length,
-          softSkills: candidateData.softSkills.length
+          technicalSkills: candidateData.technicalSkills?.length || 0,
+          softSkills: candidateData.softSkills?.length || 0
         })
         
         return candidateData
@@ -2708,8 +2708,8 @@ Return ONLY the JSON object:`
       currentCompany: candidateData.currentCompany,
       location: candidateData.location,
       totalExperience: candidateData.totalExperience,
-      technicalSkills: candidateData.technicalSkills.length,
-      softSkills: candidateData.softSkills.length
+      technicalSkills: candidateData.technicalSkills?.length || 0,
+          softSkills: candidateData.softSkills?.length || 0
     })
     
     return candidateData

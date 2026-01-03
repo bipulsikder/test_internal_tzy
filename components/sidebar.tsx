@@ -1,13 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { Users, Search, FileText, Settings, ChevronLeft, ChevronRight, Moon, Sun } from "lucide-react";
+import { Users, Search, FileText, Settings, ChevronLeft, ChevronRight, Moon, Sun, BarChart } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 interface SidebarProps {
   activeSection: string;
   setActiveSection: (section: string) => void;
+  isHrUser?: boolean;
 }
 
 const navItems = [
@@ -15,10 +16,11 @@ const navItems = [
   { key: "candidates", name: "Candidates", icon: Users },
   { key: "search", name: "Smart Search", icon: Search },
   { key: "jd-generator", name: "JD Generator", icon: FileText },
+  { key: "analytics", name: "My Analytics", icon: BarChart, isHrOnly: true },
   { key: "admin", name: "Admin", icon: Settings },
 ];
 
-export default function Sidebar({ activeSection, setActiveSection }: SidebarProps) {
+export default function Sidebar({ activeSection, setActiveSection, isHrUser = false }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [isDark, setIsDark] = useState(false);
   const router = useRouter();
@@ -39,6 +41,7 @@ export default function Sidebar({ activeSection, setActiveSection }: SidebarProp
 
   const handleLogout = () => {
     document.cookie = "auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
+    document.cookie = "hr_user=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
     router.push("/login");
   };
 
@@ -69,6 +72,7 @@ export default function Sidebar({ activeSection, setActiveSection }: SidebarProp
       <nav className="flex-1 mt-8">
         <ul className="space-y-2">
           {navItems.map((item) => {
+            if ((item as any).isHrOnly && !isHrUser) return null;
             const Icon = item.icon;
             const isActive = activeSection === item.key;
             return (
@@ -107,4 +111,4 @@ export default function Sidebar({ activeSection, setActiveSection }: SidebarProp
       </div>
     </aside>
   );
-} 
+}

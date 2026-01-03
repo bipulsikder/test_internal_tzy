@@ -62,15 +62,15 @@ export interface Database {
           date_of_birth: string | null
           gender: 'male' | 'female' | 'other' | 'prefer-not-to-say' | null
           marital_status: 'single' | 'married' | 'divorced' | 'widowed' | null
-          "current_role": string
-          "desired_role": string | null
-          "current_company": string | null
+          current_role: string
+          desired_role: string | null
+          current_company: string | null
           location: string
-          "preferred_location": string | null
-          "total_experience": string
-          "current_salary": string | null
-          "expected_salary": string | null
-          "notice_period": string | null
+          preferred_location: string | null
+          total_experience: string
+          current_salary: string | null
+          expected_salary: string | null
+          notice_period: string | null
           highest_qualification: string | null
           degree: string | null
           specialization: string | null
@@ -78,40 +78,42 @@ export interface Database {
           education_year: string | null
           education_percentage: string | null
           additional_qualifications: string | null
-          "technical_skills": any[]
-          "soft_skills": any[]
-          "languages_known": any[]
+          technical_skills: any[]
+          soft_skills: any[]
+          languages_known: any[]
           certifications: any[]
-          "previous_companies": any[]
-          "job_titles": any[]
-          "work_duration": any[]
-          "key_achievements": any[]
+          previous_companies: any[]
+          job_titles: any[]
+          work_duration: any[]
+          key_achievements: any[]
           projects: any[]
           awards: any[]
           publications: any[]
           references: any[]
-          "linkedin_profile": string | null
-          "portfolio_url": string | null
-          "github_profile": string | null
+          linkedin_profile: string | null
+          portfolio_url: string | null
+          github_profile: string | null
           summary: string | null
-          "resume_text": string | null
-          "file_name": string | null
-          "file_url": string | null
-          "file_size": number | null
-          "file_type": string | null
-          status: 'new' | 'reviewed' | 'shortlisted' | 'interviewed' | 'selected' | 'rejected' | 'on-hold'
-          tags: any[]
+          resume_text: string | null
+          file_name: string | null
+          file_url: string | null
+          file_size: number | null
+          file_type: string | null
+          status: 'new' | 'reviewed' | 'shortlisted' | 'rejected' | 'hired' | 'interviewed' | 'selected' | 'on-hold'
+          tags: string[]
           rating: number | null
           notes: string | null
-          "uploaded_at": string
-          "updated_at": string
-          "last_contacted": string | null
-          "interview_status": 'not-scheduled' | 'scheduled' | 'completed' | 'no-show' | 'rescheduled'
+          uploaded_at: string
+          updated_at: string
+          last_contacted: string | null
+          interview_status: 'not-scheduled' | 'scheduled' | 'completed' | 'offered' | 'accepted' | 'declined' | 'no-show' | 'rescheduled' | null
           feedback: string | null
-          "parsing_method": string | null
-          "parsing_confidence": number | null
-          "parsing_errors": any[]
+          parsing_method: 'gemini' | 'openai' | 'manual' | null
+          parsing_confidence: number | null
+          parsing_errors: any[] | null
+          uploaded_by: string | null
           search_vector: any
+          embedding: any // vector(1536)
         }
         Insert: {
           id?: string
@@ -121,15 +123,15 @@ export interface Database {
           date_of_birth?: string | null
           gender?: 'male' | 'female' | 'other' | 'prefer-not-to-say' | null
           marital_status?: 'single' | 'married' | 'divorced' | 'widowed' | null
-          "current_role": string
-          "desired_role"?: string | null
-          "current_company"?: string | null
+          current_role: string
+          desired_role?: string | null
+          current_company?: string | null
           location: string
-          "preferred_location"?: string | null
-          "total_experience": string
-          "current_salary"?: string | null
-          "expected_salary"?: string | null
-          "notice_period"?: string | null
+          preferred_location?: string | null
+          total_experience: string
+          current_salary?: string | null
+          expected_salary?: string | null
+          notice_period?: string | null
           highest_qualification?: string | null
           degree?: string | null
           specialization?: string | null
@@ -158,18 +160,20 @@ export interface Database {
           file_url?: string | null
           file_size?: number | null
           file_type?: string | null
-          status?: 'new' | 'reviewed' | 'shortlisted' | 'interviewed' | 'selected' | 'rejected' | 'on-hold'
-          tags?: any[]
+          status?: 'new' | 'reviewed' | 'shortlisted' | 'rejected' | 'hired' | 'interviewed' | 'selected' | 'on-hold' | 'offered' | 'accepted' | 'declined'
+          tags?: string[]
           rating?: number | null
           notes?: string | null
           uploaded_at?: string
           updated_at?: string
           last_contacted?: string | null
-          interview_status?: 'not-scheduled' | 'scheduled' | 'completed' | 'no-show' | 'rescheduled'
+          interview_status?: 'not-scheduled' | 'scheduled' | 'completed' | 'offered' | 'accepted' | 'declined' | 'no-show' | 'rescheduled' | null
           feedback?: string | null
-          parsing_method?: string | null
+          parsing_method?: 'gemini' | 'openai' | 'manual' | null
           parsing_confidence?: number | null
-          parsing_errors?: any[]
+          parsing_errors?: any[] | null
+          uploaded_by?: string | null
+          embedding?: any // vector(768)
         }
         Update: {
           id?: string
@@ -216,18 +220,20 @@ export interface Database {
           file_url?: string | null
           file_size?: number | null
           file_type?: string | null
-          status?: 'new' | 'reviewed' | 'shortlisted' | 'interviewed' | 'selected' | 'rejected' | 'on-hold'
-          tags?: any[]
+          status?: 'new' | 'reviewed' | 'shortlisted' | 'rejected' | 'hired' | 'interviewed' | 'selected' | 'on-hold'
+          tags?: string[]
           rating?: number | null
           notes?: string | null
           uploaded_at?: string
           updated_at?: string
           last_contacted?: string | null
-          interview_status?: 'not-scheduled' | 'scheduled' | 'completed' | 'no-show' | 'rescheduled'
+          interview_status?: 'not-scheduled' | 'scheduled' | 'completed' | 'offered' | 'accepted' | 'declined' | 'no-show' | 'rescheduled' | null
           feedback?: string | null
-          parsing_method?: string | null
+          parsing_method?: 'gemini' | 'openai' | 'manual' | null
           parsing_confidence?: number | null
-          parsing_errors?: any[]
+          parsing_errors?: any[] | null
+          uploaded_by?: string | null
+          embedding?: any // vector(1536)
         }
       }
       work_experience: {
@@ -382,6 +388,58 @@ export interface Database {
           created_at?: string
         }
       }
+      hr_users: {
+        Row: {
+          id: string
+          email: string
+          password_hash: string
+          name: string | null
+          created_at: string
+          last_login: string | null
+        }
+        Insert: {
+          id?: string
+          email: string
+          password_hash: string
+          name?: string | null
+          created_at?: string
+          last_login?: string | null
+        }
+        Update: {
+          id?: string
+          email?: string
+          password_hash?: string
+          name?: string | null
+          created_at?: string
+          last_login?: string | null
+        }
+      }
+      search_logs: {
+        Row: {
+          id: string
+          hr_user_id: string | null
+          search_query: string | null
+          filters: any | null
+          results_count: number | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          hr_user_id?: string | null
+          search_query?: string | null
+          filters?: any | null
+          results_count?: number | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          hr_user_id?: string | null
+          search_query?: string | null
+          filters?: any | null
+          results_count?: number | null
+          created_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
@@ -423,6 +481,23 @@ export interface Database {
           selected_candidates: number
           rejected_candidates: number
         }[]
+      }
+      verify_hr_credentials: {
+        Args: {
+          email_input: string
+          password_input: string
+        }
+        Returns: {
+          id: string
+          email: string
+          name: string
+        }[]
+      }
+      get_hr_analytics: {
+        Args: {
+          target_hr_id: string
+        }
+        Returns: any
       }
     }
     Enums: {

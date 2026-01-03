@@ -8,6 +8,7 @@ import { CandidateDashboard } from "@/components/candidate-dashboard"
 import { SmartSearch } from "@/components/smart-search"
 import { JDGenerator } from "@/components/jd-generator"
 import { AdminPanel } from "@/components/admin-panel"
+import { AnalyticsDashboard } from "@/components/analytics-dashboard"
 
 function getCookie(name: string) {
   if (typeof document === "undefined") return null;
@@ -23,6 +24,7 @@ function getCookie(name: string) {
 export default function HomePage() {
   const [mounted, setMounted] = useState(false)
   const [activeSection, setActiveSection] = useState("upload")
+  const [isHrUser, setIsHrUser] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
@@ -30,6 +32,10 @@ export default function HomePage() {
     // Redirect to /login if not authenticated
     if (getCookie("auth") !== "true") {
       router.replace("/login")
+    }
+    // Check if HR user
+    if (getCookie("hr_user")) {
+      setIsHrUser(true)
     }
   }, [])
 
@@ -39,7 +45,7 @@ export default function HomePage() {
 
   return (
     <div className="flex min-h-screen w-full bg-gray-50 dark:bg-[#23272f]">
-      <Sidebar activeSection={activeSection} setActiveSection={setActiveSection} />
+      <Sidebar activeSection={activeSection} setActiveSection={setActiveSection} isHrUser={isHrUser} />
       <main className="flex-1 min-h-screen w-full p-8 overflow-auto">
         {activeSection === "upload" && (
           <Card className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-md">
@@ -90,6 +96,19 @@ export default function HomePage() {
             </CardHeader>
             <CardContent>
               <JDGenerator />
+            </CardContent>
+          </Card>
+        )}
+        {activeSection === "analytics" && (
+          <Card className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-md">
+            <CardHeader>
+              <CardTitle>My Analytics</CardTitle>
+              <CardDescription>
+                Track your personal usage and performance metrics
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AnalyticsDashboard />
             </CardContent>
           </Card>
         )}

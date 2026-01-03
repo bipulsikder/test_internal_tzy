@@ -17,6 +17,21 @@ export async function POST(request: NextRequest) {
 
   console.log("=== Comprehensive Resume Upload Started ===")
 
+  // Get HR user ID if available
+  let uploadedBy: string | undefined = undefined
+  const hrUserCookie = request.cookies.get("hr_user")?.value
+  if (hrUserCookie) {
+    try {
+      const hrUser = JSON.parse(hrUserCookie)
+      if (hrUser && hrUser.id) {
+        uploadedBy = hrUser.id
+        console.log(`Associating upload with HR user: ${uploadedBy}`)
+      }
+    } catch (e) {
+      console.warn("Failed to parse hr_user cookie:", e)
+    }
+  }
+
   try {
     const formData = await request.formData()
     const file = formData.get("resume") as File
@@ -273,7 +288,7 @@ export async function POST(request: NextRequest) {
       console.log("Generating embedding...")
       let embedding = []
       try {
-        embedding = await generateEmbedding(parsedData.resumeText)
+        embedding = await generateEmbedding(parsedData.resumeText || "")
         console.log("✅ Embedding generated successfully")
       } catch (embeddingError) {
         console.warn("⚠️ Failed to generate embedding:", embeddingError)
@@ -347,6 +362,7 @@ export async function POST(request: NextRequest) {
         parsing_method: "gemini",
         parsing_confidence: 0.95,
         parsing_errors: [],
+        uploadedBy: uploadedBy,
       }
 
       // Add to Supabase
@@ -362,11 +378,10 @@ export async function POST(request: NextRequest) {
           if (parsedData.email && parsedData.email.trim()) {
             existingCandidate = await SupabaseCandidateService.getCandidateByEmail(parsedData.email.trim())
           }
+          
           if (!existingCandidate) {
-            const existingCandidates = await SupabaseCandidateService.getAllCandidates()
-            existingCandidate = existingCandidates.find(c => 
-              c.email?.trim().toLowerCase() === parsedData.email?.trim().toLowerCase()
-            )
+            console.warn("Duplicate email error but could not find candidate by email:", parsedData.email)
+            throw addError
           }
           
           if (existingCandidate?.id) {
@@ -525,7 +540,7 @@ export async function POST(request: NextRequest) {
       console.log("Generating embedding...")
       let embedding = []
       try {
-        embedding = await generateEmbedding(parsedData.resumeText)
+        embedding = await generateEmbedding(parsedData.resumeText || "")
         console.log("✅ Embedding generated successfully")
       } catch (embeddingError) {
         console.warn("⚠️ Failed to generate embedding:", embeddingError)
@@ -602,6 +617,7 @@ export async function POST(request: NextRequest) {
         parsing_method: "gemini",
         parsing_confidence: 0.95,
         parsing_errors: [],
+        uploadedBy: uploadedBy,
       }
 
       // Add to Supabase

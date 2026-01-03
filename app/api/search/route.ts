@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { supabase, supabaseAdmin } from "@/lib/supabase"
 import { generateEmbedding, searchCandidates, extractKeywordsFromSentence, extractSearchKeywordsWithAI } from "@/lib/ai-utils"
 import { SupabaseCandidateService } from "@/lib/supabase-candidates"
 import { logger } from "@/lib/logger"
@@ -394,6 +395,30 @@ export async function GET(request: NextRequest) {
 
     // Process pagination and generate summaries
     const responseData = await processResultsWithSummary(filteredResults, page, perPage, paginate, activeRequirements);
+
+    // Log the search if HR user is logged in
+    const hrUserCookie = request.cookies.get("hr_user")?.value
+    if (hrUserCookie) {
+      try {
+        const hrUser = JSON.parse(hrUserCookie)
+        if (hrUser && hrUser.id) {
+           const resultsCount = paginate ? (responseData as any).total : (responseData as any[]).length;
+           
+           // Fire and forget logging
+           supabaseAdmin.from('search_logs').insert({
+              hr_user_id: hrUser.id,
+              search_query: query || (searchType === 'jd' ? 'JD Analysis' : 'Manual Search'),
+              filters: activeRequirements,
+              results_count: resultsCount
+           }).then(({ error }) => {
+              if (error) console.error("Error logging search:", error)
+           })
+        }
+      } catch (e) {
+        console.error("Error parsing hr_user cookie for logging:", e)
+      }
+    }
+
     return NextResponse.json(responseData);
 
   } catch (error) {

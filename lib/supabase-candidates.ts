@@ -1,5 +1,5 @@
 import { supabase, supabaseAdmin, Database } from './supabase'
-import { ComprehensiveCandidateData } from './google-sheets'
+import { ComprehensiveCandidateData } from './types'
 
 // Import the BUCKET_NAME constant from supabase-storage-utils
 const { BUCKET_NAME } = require('./supabase-storage-utils')
@@ -58,15 +58,17 @@ export class SupabaseCandidateService {
       fileName: row.file_name || '',
       filePath: '', // Path in Supabase storage
       fileUrl: row.file_url || '',
-      status: row.status,
+      status: row.status as any,
       tags: row.tags || [],
       rating: row.rating !== null ? row.rating : undefined,
       notes: row.notes || '',
       uploadedAt: row.uploaded_at,
       updatedAt: row.updated_at,
       lastContacted: row.last_contacted || '',
-      interviewStatus: row.interview_status,
+      interviewStatus: row.interview_status as any,
       feedback: row.feedback || '',
+      uploadedBy: row.uploaded_by || undefined,
+      embedding: row.embedding as any || undefined,
     }
   }
 
@@ -116,18 +118,20 @@ export class SupabaseCandidateService {
       file_url: candidate.fileUrl || null,
       file_size: null, // Will be set when file is uploaded
       file_type: null, // Will be set when file is uploaded
-      status: candidate.status || 'new',
+      status: (candidate.status as any) || 'new',
       tags: candidate.tags || [],
       rating: candidate.rating || null,
       notes: candidate.notes || null,
       uploaded_at: candidate.uploadedAt || new Date().toISOString(),
       updated_at: candidate.updatedAt || new Date().toISOString(),
       last_contacted: candidate.lastContacted || null,
-      interview_status: candidate.interviewStatus || 'not-scheduled',
+      interview_status: (candidate.interviewStatus as any) || 'not-scheduled',
       feedback: candidate.feedback || null,
       parsing_method: 'gemini', // Default to gemini
       parsing_confidence: 0.95, // Default confidence
       parsing_errors: [],
+      uploaded_by: candidate.uploadedBy || null,
+      embedding: candidate.embedding ? (Array.isArray(candidate.embedding) ? JSON.stringify(candidate.embedding) : candidate.embedding) : null,
     }
   }
 
@@ -212,7 +216,7 @@ export class SupabaseCandidateService {
   }
 
   // Get all candidates
-  static async getAllCandidates(): Promise<ComprehensiveCandidateData[]> {
+  static async getAllCandidates(includeDetails: boolean = true): Promise<ComprehensiveCandidateData[]> {
     try {
       const { data, error } = await supabase
         .from('candidates')
@@ -227,64 +231,66 @@ export class SupabaseCandidateService {
       const candidates = (data || []).map(row => this.mapRowToCandidate(row))
 
       // Attach detailed work experience and education in bulk
-      const candidateIds = candidates.map(c => c.id).filter((id): id is string => !!id)
-      if (candidateIds.length > 0) {
-        try {
-          const chunkSize = 200
-          const chunkedIds: string[][] = []
-          for (let i = 0; i < candidateIds.length; i += chunkSize) {
-            chunkedIds.push(candidateIds.slice(i, i + chunkSize))
-          }
-
-          let workExpsAll: any[] = []
-          let educationsAll: any[] = []
-
-          for (const chunk of chunkedIds) {
-            const [{ data: workExps, error: workErr }, { data: educations, error: eduErr }] = await Promise.all([
-              supabase.from('work_experience').select('*').in('candidate_id', chunk),
-              supabase.from('education').select('*').in('candidate_id', chunk)
-            ])
-            if (workErr) console.warn('Work experience fetch (bulk) error:', workErr)
-            if (eduErr) console.warn('Education fetch (bulk) error:', eduErr)
-            workExpsAll = workExpsAll.concat(workExps || [])
-            educationsAll = educationsAll.concat(educations || [])
-          }
-
-          const workByCandidate = new Map<string, any[]>()
-          const eduByCandidate = new Map<string, any[]>()
-
-          ;(workExpsAll || []).forEach(exp => {
-            const cid = exp.candidate_id
-            if (!workByCandidate.has(cid)) workByCandidate.set(cid, [])
-            workByCandidate.get(cid)!.push({
-              company: exp.company || '',
-              role: exp.role || '',
-              duration: exp.duration || [(exp.start_date || ''), (exp.end_date || '')].filter(Boolean).join(' - '),
-              description: exp.description || ''
-            })
-          })
-
-          ;(educationsAll || []).forEach(edu => {
-            const cid = edu.candidate_id
-            if (!eduByCandidate.has(cid)) eduByCandidate.set(cid, [])
-            eduByCandidate.get(cid)!.push({
-              degree: edu.degree || '',
-              specialization: edu.specialization || '',
-              institution: edu.institution || '',
-              year: edu.year || [(edu.start_date || ''), (edu.end_date || '')].filter(Boolean).join(' - '),
-              percentage: edu.percentage || ''
-            })
-          })
-
-          candidates.forEach(c => {
-            const cid = c.id
-            if (cid) {
-              c.workExperience = workByCandidate.get(cid) || []
-              c.education = eduByCandidate.get(cid) || []
+      if (includeDetails) {
+        const candidateIds = candidates.map(c => c.id).filter((id): id is string => !!id)
+        if (candidateIds.length > 0) {
+          try {
+            const chunkSize = 200
+            const chunkedIds: string[][] = []
+            for (let i = 0; i < candidateIds.length; i += chunkSize) {
+              chunkedIds.push(candidateIds.slice(i, i + chunkSize))
             }
-          })
-        } catch (bulkErr) {
-          console.warn('Failed attaching detailed experience/education (bulk):', bulkErr)
+
+            let workExpsAll: any[] = []
+            let educationsAll: any[] = []
+
+            for (const chunk of chunkedIds) {
+              const [{ data: workExps, error: workErr }, { data: educations, error: eduErr }] = await Promise.all([
+                supabase.from('work_experience').select('*').in('candidate_id', chunk),
+                supabase.from('education').select('*').in('candidate_id', chunk)
+              ])
+              if (workErr) console.warn('Work experience fetch (bulk) error:', workErr)
+              if (eduErr) console.warn('Education fetch (bulk) error:', eduErr)
+              workExpsAll = workExpsAll.concat(workExps || [])
+              educationsAll = educationsAll.concat(educations || [])
+            }
+
+            const workByCandidate = new Map<string, any[]>()
+            const eduByCandidate = new Map<string, any[]>()
+
+            ;(workExpsAll || []).forEach(exp => {
+              const cid = exp.candidate_id
+              if (!workByCandidate.has(cid)) workByCandidate.set(cid, [])
+              workByCandidate.get(cid)!.push({
+                company: exp.company || '',
+                role: exp.role || '',
+                duration: exp.duration || [(exp.start_date || ''), (exp.end_date || '')].filter(Boolean).join(' - '),
+                description: exp.description || ''
+              })
+            })
+
+            ;(educationsAll || []).forEach(edu => {
+              const cid = edu.candidate_id
+              if (!eduByCandidate.has(cid)) eduByCandidate.set(cid, [])
+              eduByCandidate.get(cid)!.push({
+                degree: edu.degree || '',
+                specialization: edu.specialization || '',
+                institution: edu.institution || '',
+                year: edu.year || [(edu.start_date || ''), (edu.end_date || '')].filter(Boolean).join(' - '),
+                percentage: edu.percentage || ''
+              })
+            })
+
+            candidates.forEach(c => {
+              const cid = c.id
+              if (cid) {
+                c.workExperience = workByCandidate.get(cid) || []
+                c.education = eduByCandidate.get(cid) || []
+              }
+            })
+          } catch (bulkErr) {
+            console.warn('Failed attaching detailed experience/education (bulk):', bulkErr)
+          }
         }
       }
 
@@ -641,6 +647,10 @@ export class SupabaseCandidateService {
       if (updates.tags !== undefined) updateData.tags = updates.tags
       if (updates.interviewStatus !== undefined) updateData.interview_status = updates.interviewStatus
       if (updates.feedback !== undefined) updateData.feedback = updates.feedback
+      if (updates.uploadedBy !== undefined) updateData.uploaded_by = updates.uploadedBy
+      if (updates.embedding !== undefined) {
+        updateData.embedding = updates.embedding ? (Array.isArray(updates.embedding) ? JSON.stringify(updates.embedding) : updates.embedding) : null
+      }
       
       // Handle timestamp safely: avoid sending empty string to timestamptz column
       if (updates.lastContacted !== undefined) {
@@ -811,6 +821,18 @@ export class SupabaseCandidateService {
       // Parse the resume
       const { parseResume } = require('./resume-parser')
       const parsedData = await parseResume(file)
+      
+      // Generate embedding if resume text is available
+      if (parsedData.resumeText) {
+        try {
+          const { generateEmbedding } = require('./ai-utils')
+          const embedding = await generateEmbedding(parsedData.resumeText)
+          parsedData.embedding = embedding
+        } catch (embError) {
+          console.error('Failed to generate embedding during reparse:', embError)
+          // Continue without embedding update
+        }
+      }
       
       // Update the candidate with new parsed data
       await this.updateCandidate(candidateId, parsedData)

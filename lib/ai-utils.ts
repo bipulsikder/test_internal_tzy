@@ -56,9 +56,42 @@ export async function generateJobDescriptionWithEmbeddings(
   try {
     const model = genAI.getGenerativeModel({ model: DEFAULT_GEMINI_MODEL })
 
-    // Get all candidates from Supabase database
-    const allCandidates = await SupabaseCandidateService.getAllCandidates()
-    console.log(`📊 Total candidates in database: ${allCandidates.length}`)
+    // Get candidates using vector search + text search instead of fetching all
+    console.log("Fetching relevant candidates using search...")
+    let allCandidates: any[] = []
+    
+    if (useEmbeddings) {
+      try {
+        // Generate embedding for the job title
+        const jobTitleEmbedding = await generateEmbedding(customInputs.jobTitle)
+        
+        // Search by embedding
+        const vectorResults = await SupabaseCandidateService.searchCandidatesByEmbedding(jobTitleEmbedding, 0.4, 50)
+        console.log(`Vector search found ${vectorResults.length} candidates`)
+        allCandidates = [...vectorResults]
+        
+        // Pass the query embedding to the loop below to avoid re-generating
+        // (We can't easily pass it, but we can avoid re-generating jobTitleEmbedding)
+      } catch (e) {
+        console.warn("Vector search failed, falling back to text search", e)
+      }
+    }
+
+    // Fallback or augment with text search
+    if (allCandidates.length < 20) {
+       console.log("Augmenting with text search...")
+       const textResults = await SupabaseCandidateService.searchCandidatesByText(customInputs.jobTitle, 50)
+       
+       const existingIds = new Set(allCandidates.map(c => c.id))
+       textResults.forEach(c => {
+         if (c.id && !existingIds.has(c.id)) {
+           allCandidates.push(c)
+           existingIds.add(c.id)
+         }
+       })
+    }
+
+    console.log(`📊 Candidates pool size: ${allCandidates.length}`)
 
     let similarCandidates: any[] = []
     let databaseInsights: string[] = []
@@ -66,7 +99,8 @@ export async function generateJobDescriptionWithEmbeddings(
 
     if (useEmbeddings && allCandidates.length > 0) {
       try {
-        // Generate embedding for the job title
+        // Generate embedding for the job title (if not already done, but we need it here if we want to re-score)
+        // We can optimize by reusing if we had a way to store it, but for now let's just re-generate or optimize loop
         const jobTitleEmbedding = await generateEmbedding(customInputs.jobTitle)
 
         // Find similar candidates using embeddings and fuzzy matching
@@ -95,12 +129,8 @@ export async function generateJobDescriptionWithEmbeddings(
             similarity += (commonKeywords.length / jobKeywords.length) * 0.5
 
             // Try embedding similarity if possible
-            try {
-              const candidateEmbedding = await generateEmbedding(roleText)
-              const embeddingSimilarity = cosineSimilarity(jobTitleEmbedding, candidateEmbedding)
-              similarity = Math.max(similarity, embeddingSimilarity)
-            } catch (embeddingError) {
-              console.log("Embedding similarity failed, using text similarity")
+            if ((candidate as any).vectorSimilarity) {
+               similarity = Math.max(similarity, (candidate as any).vectorSimilarity)
             }
 
             return {
