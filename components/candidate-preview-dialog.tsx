@@ -53,8 +53,11 @@ import {
   CheckCircle,
   Info,
   Trash,
+  BrainCircuit,
+  Loader2,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { AssignJobDialog } from "./assign-job-dialog"
 
 interface CandidateData {
   _id: string
@@ -106,6 +109,7 @@ interface CandidateData {
   relevanceScore?: number
   matchingKeywords?: string[]
   matchPercentage?: number
+  matchSummary?: string
 }
 
 interface CandidatePreviewDialogProps {
@@ -116,6 +120,7 @@ interface CandidatePreviewDialogProps {
   onNotesUpdate?: (candidateId: string, notes: string) => Promise<void>
   onRatingUpdate?: (candidateId: string, rating: number) => Promise<void>
   showRelevanceScore?: boolean
+  jobId?: string
 }
 
 export function CandidatePreviewDialog({
@@ -126,6 +131,7 @@ export function CandidatePreviewDialog({
   onNotesUpdate,
   onRatingUpdate,
   showRelevanceScore = false,
+  jobId,
 }: CandidatePreviewDialogProps) {
   const [showStatusConfirm, setShowStatusConfirm] = useState(false)
   const [pendingStatus, setPendingStatus] = useState("")
@@ -138,6 +144,11 @@ export function CandidatePreviewDialog({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [fetchedCandidate, setFetchedCandidate] = useState<CandidateData | null>(null)
+  const [assignJobOpen, setAssignJobOpen] = useState(false)
+  
+  // AI Analysis state
+  const [aiAnalysis, setAiAnalysis] = useState<string>("")
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
 
   // Initialize state when candidate changes
   useEffect(() => {
@@ -145,6 +156,7 @@ export function CandidatePreviewDialog({
       setNotes(candidate.notes || "")
       setRating(candidate.rating || undefined)
       setFetchedCandidate(null) // Reset fetched candidate
+      setAiAnalysis(candidate.matchSummary || "") // Initialize with existing summary if available
       
       // Fetch fresh candidate data to ensure we have the latest file URL and details
       const fetchFreshCandidate = async () => {
@@ -416,6 +428,33 @@ export function CandidatePreviewDialog({
     return experience?.toString() || "Not specified"
   }
 
+  const generateAnalysis = async () => {
+    if (!jobId || !candidateId) return
+    setIsAnalyzing(true)
+    try {
+      const res = await fetch("/api/matches/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, candidateId })
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setAiAnalysis(data.summary)
+      toast({
+        title: "Analysis Generated",
+        description: "AI analysis is ready.",
+      })
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to generate analysis",
+        variant: "destructive",
+      })
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
   return (
     <>
       <Dialog open={isOpen} onOpenChange={onClose}>
@@ -437,6 +476,10 @@ export function CandidatePreviewDialog({
                 </div>
               </div>
               <div className="flex items-center space-x-3">
+                <Button size="sm" onClick={() => setAssignJobOpen(true)}>
+                  <Briefcase className="mr-2 h-4 w-4" />
+                  Assign to Job
+                </Button>
                 {showRelevanceScore && safeCandidate.relevanceScore !== undefined && (
                   <Badge className={`${getRelevanceColor(safeCandidate.relevanceScore)} font-medium text-sm px-3 py-1`}>
                     {getRelevanceLabel(safeCandidate.relevanceScore)} ({Math.round(safeCandidate.relevanceScore * 100)}%)
@@ -464,28 +507,34 @@ export function CandidatePreviewDialog({
 
           <ScrollArea className="flex-1 pr-4">
             <Tabs defaultValue="overview" className="w-full">
-              <TabsList className="grid w-full grid-cols-6 mb-6">
-                <TabsTrigger value="overview" className="flex items-center gap-2">
+              <TabsList className="w-full flex justify-start overflow-x-auto mb-6">
+                <TabsTrigger value="overview" className="flex items-center gap-2 flex-1 min-w-[100px]">
                   <User className="h-4 w-4" />
                   Overview
                 </TabsTrigger>
-                <TabsTrigger value="professional" className="flex items-center gap-2">
+                <TabsTrigger value="professional" className="flex items-center gap-2 flex-1 min-w-[100px]">
                   <Briefcase className="h-4 w-4" />
                   Professional
                 </TabsTrigger>
-                <TabsTrigger value="education" className="flex items-center gap-2">
+                <TabsTrigger value="education" className="flex items-center gap-2 flex-1 min-w-[100px]">
                   <GraduationCap className="h-4 w-4" />
                   Education
                 </TabsTrigger>
-                <TabsTrigger value="skills" className="flex items-center gap-2">
+                <TabsTrigger value="skills" className="flex items-center gap-2 flex-1 min-w-[100px]">
                   <Code className="h-4 w-4" />
                   Skills
                 </TabsTrigger>
-                <TabsTrigger value="resume" className="flex items-center gap-2">
+                <TabsTrigger value="resume" className="flex items-center gap-2 flex-1 min-w-[100px]">
                   <FileText className="h-4 w-4" />
                   Resume
                 </TabsTrigger>
-                <TabsTrigger value="actions" className="flex items-center gap-2">
+                {jobId && (
+                    <TabsTrigger value="analysis" className="flex items-center gap-2 flex-1 min-w-[100px]">
+                        <BrainCircuit className="h-4 w-4" />
+                        AI Analysis
+                    </TabsTrigger>
+                )}
+                <TabsTrigger value="actions" className="flex items-center gap-2 flex-1 min-w-[100px]">
                   <Target className="h-4 w-4" />
                   Actions
                 </TabsTrigger>
@@ -1304,6 +1353,51 @@ export function CandidatePreviewDialog({
                 )}
               </TabsContent>
 
+              <TabsContent value="analysis" className="space-y-6">
+                 <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <BrainCircuit className="h-5 w-5 text-purple-600" />
+                            AI Match Analysis
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        {!aiAnalysis && !isAnalyzing && (
+                            <div className="flex flex-col items-center justify-center py-8 text-center space-y-4">
+                                <p className="text-gray-500 max-w-md">
+                                    Generate a detailed AI analysis of how this candidate matches the specific requirements of this job.
+                                </p>
+                                <Button onClick={generateAnalysis} className="bg-purple-600 hover:bg-purple-700">
+                                    <BrainCircuit className="mr-2 h-4 w-4" />
+                                    Generate Analysis
+                                </Button>
+                            </div>
+                        )}
+
+                        {isAnalyzing && (
+                            <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                                <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
+                                <p className="text-gray-500">Analyzing candidate profile against job requirements...</p>
+                            </div>
+                        )}
+
+                        {aiAnalysis && (
+                            <div className="prose prose-sm max-w-none bg-purple-50 p-6 rounded-lg border border-purple-100">
+                                <div className="whitespace-pre-wrap font-medium text-gray-800 leading-relaxed">
+                                    {aiAnalysis}
+                                </div>
+                                <div className="mt-6 flex justify-end">
+                                     <Button variant="outline" size="sm" onClick={generateAnalysis} disabled={isAnalyzing}>
+                                        <BrainCircuit className="mr-2 h-4 w-4" />
+                                        Regenerate
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                 </Card>
+              </TabsContent>
+
               <TabsContent value="actions" className="space-y-6">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Status Management */}
@@ -1401,6 +1495,13 @@ export function CandidatePreviewDialog({
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                      <Button 
+                        onClick={() => setAssignJobOpen(true)}
+                        className="h-12 bg-purple-600 hover:bg-purple-700 text-white"
+                      >
+                        <Briefcase className="h-5 w-5 mr-2" />
+                        Assign to Job
+                      </Button>
                       <Button asChild className="h-12 bg-blue-600 hover:bg-blue-700">
                         <a href={`mailto:${safeCandidate.email}`}>
                           <Mail className="h-5 w-5 mr-2" />
@@ -1522,6 +1623,13 @@ export function CandidatePreviewDialog({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AssignJobDialog 
+        candidateId={candidateId} 
+        open={assignJobOpen} 
+        onOpenChange={setAssignJobOpen}
+        candidateName={safeCandidate.name}
+      />
     </>
   )
 }

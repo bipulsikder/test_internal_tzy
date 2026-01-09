@@ -9,6 +9,7 @@ import { SmartSearch } from "@/components/smart-search"
 import { JDGenerator } from "@/components/jd-generator"
 import { AdminPanel } from "@/components/admin-panel"
 import { AnalyticsDashboard } from "@/components/analytics-dashboard"
+import { JobsDashboard } from "@/components/jobs-dashboard"
 
 function getCookie(name: string) {
   if (typeof document === "undefined") return null;
@@ -57,6 +58,13 @@ export default function HomePage() {
             </CardHeader>
             <CardContent>
               <UploadSection />
+            </CardContent>
+          </Card>
+        )}
+        {activeSection === "jobs" && (
+          <Card className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-md">
+            <CardContent className="p-6">
+              <JobsDashboard />
             </CardContent>
           </Card>
         )}

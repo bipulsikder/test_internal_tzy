@@ -163,6 +163,10 @@ export async function generateJobDescriptionWithEmbeddings(
 
     const prompt = `You are an expert HR assistant.
 Generate a detailed job description tailored for the role: "${customInputs.jobTitle}".
+Industry: ${customInputs.industry || "General"}
+Experience Level: ${customInputs.experienceLevel || "Not specified"}
+Additional Requirements/Context: ${customInputs.additionalRequirements || "None"}
+
 Use relevant insights from our database of candidates:
 ${databaseInsightsText || "No exact matches found; infer based on role."}
 

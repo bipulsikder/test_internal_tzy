@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { Users, Search, FileText, Settings, ChevronLeft, ChevronRight, Moon, Sun, BarChart } from "lucide-react";
+import { Users, Search, FileText, Settings, ChevronLeft, ChevronRight, Moon, Sun, BarChart, Briefcase } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
@@ -13,6 +13,7 @@ interface SidebarProps {
 
 const navItems = [
   { key: "upload", name: "Upload", icon: FileText },
+  { key: "jobs", name: "Jobs", icon: Briefcase },
   { key: "candidates", name: "Candidates", icon: Users },
   { key: "search", name: "Smart Search", icon: Search },
   { key: "jd-generator", name: "JD Generator", icon: FileText },
