@@ -148,6 +148,28 @@ export async function POST(request: NextRequest) {
         }, { status: 422 })
       }
 
+      // Enforce resume content presence and quality
+      const resumeText = (parsedData.resumeText || "").trim()
+      const resumeTextLooksErroneous = /error|processing error|extraction failed/i.test(resumeText)
+      if (!resumeText || resumeText.length < 50 || resumeTextLooksErroneous) {
+        return NextResponse.json({
+          error: "Resume content not extracted",
+          parsingFailed: true,
+          details: resumeTextLooksErroneous ? "Text extraction returned an error marker" : "Insufficient resume text available",
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+          suggestions: [
+            "Upload a selectable-text PDF (not scanned image-only)",
+            "If DOC/DOCX, re-save as PDF and try again",
+            "Ensure the file is not password protected",
+            "Avoid uploading screenshots or photos of resumes"
+          ],
+          timestamp: new Date().toISOString(),
+          resultType: "blocked"
+        }, { status: 422 })
+      }
+
       // Validation: block storing incomplete profiles
       const normalizedName = (parsedData.name || "").trim().toLowerCase()
       const isNameInvalid = !normalizedName || normalizedName.length < 2 || normalizedName === "unknown" || normalizedName === "not specified"

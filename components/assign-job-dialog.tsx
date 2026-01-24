@@ -34,6 +34,7 @@ export function AssignJobDialog({ candidateId, open, onOpenChange, candidateName
   const [fetchingJobs, setFetchingJobs] = useState(false)
   const [selectedJob, setSelectedJob] = useState<string>("")
   const [notes, setNotes] = useState("")
+  const [sendInvite, setSendInvite] = useState(true)
   const { toast } = useToast()
 
   useEffect(() => {
@@ -81,6 +82,36 @@ export function AssignJobDialog({ candidateId, open, onOpenChange, candidateName
         title: "Success",
         description: `Candidate assigned to job successfully`,
       })
+
+      if (sendInvite) {
+        try {
+          const inv = await fetch("/api/job-invites", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jobId: selectedJob, candidateId })
+          })
+          const data = await inv.json().catch(() => null)
+          if (inv.ok && data?.link) {
+            toast({
+              title: "Invite link created",
+              description: data.link
+            })
+          } else if (data?.error) {
+            toast({
+              title: "Invite not sent",
+              description: data.error,
+              variant: "destructive"
+            })
+          }
+        } catch (e: any) {
+          toast({
+            title: "Invite not sent",
+            description: e.message || "Failed to create invite",
+            variant: "destructive"
+          })
+        }
+      }
+
       onOpenChange(false)
       setSelectedJob("")
       setNotes("")
@@ -131,6 +162,16 @@ export function AssignJobDialog({ candidateId, open, onOpenChange, candidateName
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Add initial screening notes..."
             />
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              id="sendInvite"
+              type="checkbox"
+              checked={sendInvite}
+              onChange={(e) => setSendInvite(e.target.checked)}
+              className="h-4 w-4"
+            />
+            <Label htmlFor="sendInvite">Create invite link for this job</Label>
           </div>
         </div>
         <DialogFooter>

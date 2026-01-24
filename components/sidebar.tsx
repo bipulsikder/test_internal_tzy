@@ -1,30 +1,37 @@
 "use client";
 
 import Image from "next/image";
-import { Users, Search, FileText, Settings, ChevronLeft, ChevronRight, Moon, Sun, BarChart, Briefcase } from "lucide-react";
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Users, Search, FileText, Settings, ChevronLeft, ChevronRight, Moon, Sun, BarChart, Briefcase, Building2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 
 interface SidebarProps {
-  activeSection: string;
-  setActiveSection: (section: string) => void;
   isHrUser?: boolean;
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
 }
 
 const navItems = [
-  { key: "upload", name: "Upload", icon: FileText },
-  { key: "jobs", name: "Jobs", icon: Briefcase },
-  { key: "candidates", name: "Candidates", icon: Users },
-  { key: "search", name: "Smart Search", icon: Search },
-  { key: "jd-generator", name: "JD Generator", icon: FileText },
-  { key: "analytics", name: "My Analytics", icon: BarChart, isHrOnly: true },
-  { key: "admin", name: "Admin", icon: Settings },
+  { href: "/upload", name: "Upload", icon: FileText },
+  { href: "/jobs", name: "Jobs", icon: Briefcase },
+  { href: "/candidates", name: "Candidates", icon: Users },
+  { href: "/clients", name: "Clients", icon: Building2 },
+  { href: "/search", name: "Smart Search", icon: Search },
+  { href: "/jd-generator", name: "JD Generator", icon: FileText },
+  { href: "/analytics", name: "My Analytics", icon: BarChart, isHrOnly: true },
+  { href: "/admin", name: "Admin", icon: Settings },
 ];
 
-export default function Sidebar({ activeSection, setActiveSection, isHrUser = false }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
+export default function Sidebar({ isHrUser = false, collapsed, setCollapsed }: SidebarProps) {
   const [isDark, setIsDark] = useState(false);
   const router = useRouter();
+  const pathname = usePathname() || "";
+
+  const activeHref = useMemo(() => {
+    const path = pathname.split("?")[0]
+    if (path.startsWith("/clients/")) return "/clients"
+    return path
+  }, [pathname])
 
   useEffect(() => {
     // Always set light mode on mount
@@ -64,7 +71,7 @@ export default function Sidebar({ activeSection, setActiveSection, isHrUser = fa
         </div>
         <button
           className="ml-2 p-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-800"
-          onClick={() => setCollapsed((c) => !c)}
+          onClick={() => setCollapsed(!collapsed)}
           aria-label="Toggle sidebar"
         >
           {collapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
@@ -75,12 +82,12 @@ export default function Sidebar({ activeSection, setActiveSection, isHrUser = fa
           {navItems.map((item) => {
             if ((item as any).isHrOnly && !isHrUser) return null;
             const Icon = item.icon;
-            const isActive = activeSection === item.key;
+            const isActive = activeHref === (item as any).href;
             return (
-              <li key={item.key}>
+              <li key={(item as any).href}>
                 <button
                   type="button"
-                  onClick={() => setActiveSection(item.key)}
+                  onClick={() => router.push((item as any).href)}
                   className={`flex items-center w-full px-4 py-3 rounded-lg transition-colors group focus:outline-none ${
                     isActive
                       ? "bg-blue-100 text-blue-700 font-semibold dark:bg-blue-900/60 dark:text-blue-200"

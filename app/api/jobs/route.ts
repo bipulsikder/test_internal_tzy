@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { title, description, industry, location, type, requirements, salary_range, status, positions, client_name, experience } = body
+    const { title, description, industry, sub_category, location, type, requirements, salary_range, status, positions, client_name, client_id, amount, skills_required, experience } = body
 
     if (!title) {
       return NextResponse.json({ error: "Title is required" }, { status: 400 })
@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
         title,
         description,
         department: industry, // Backward compat: map industry -> department
+        sub_category: typeof sub_category === "string" && sub_category.length ? sub_category : null,
         location,
         type,
         requirements,
@@ -64,6 +65,9 @@ export async function POST(request: NextRequest) {
         status: status || 'open',
         positions,
         client_name,
+        client_id: typeof client_id === "string" && client_id.length ? client_id : null,
+        amount: typeof amount === "string" && amount.length ? amount : null,
+        skills_required: Array.isArray(skills_required) ? skills_required : null,
         experience
       })
       .select()

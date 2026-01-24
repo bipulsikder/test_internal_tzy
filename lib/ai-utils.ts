@@ -162,9 +162,13 @@ export async function generateJobDescriptionWithEmbeddings(
       .join("\n")
 
     const prompt = `You are an expert HR assistant.
-Generate a detailed job description tailored for the role: "${customInputs.jobTitle}".
+Generate a detailed and highly relevant job description tailored for the role: "${customInputs.jobTitle}".
 Industry: ${customInputs.industry || "General"}
+Sub-category/Domain: ${customInputs.subCategory || customInputs.sub_category || "Not specified"}
+Location: ${customInputs.location || "Not specified"}
+Employment Type: ${customInputs.type || "Not specified"}
 Experience Level: ${customInputs.experienceLevel || "Not specified"}
+Must-have Skills (if provided): ${Array.isArray(customInputs.skillsRequired) ? customInputs.skillsRequired.join(", ") : (customInputs.skillsRequired || "")}
 Additional Requirements/Context: ${customInputs.additionalRequirements || "None"}
 
 Use relevant insights from our database of candidates:
@@ -181,8 +185,7 @@ Return ONLY a valid JSON object with this exact structure:
   "description": "Detailed job description (2-3 paragraphs)",
   "responsibilities": ["Array of 6-8 key responsibilities"],
   "requirements": ["Array of 6-8 requirements"],
-  "skills": ["Array of 10-15 required skills"],
-  "benefits": ["Array of 6-8 benefits"]
+  "skills": ["Array of 10-15 required skills"]
 }`
 
     console.log("Sending enhanced JD generation request to Gemini...")
@@ -215,7 +218,6 @@ Return ONLY a valid JSON object with this exact structure:
         responsibilities: Array.isArray(parsedJD.responsibilities) ? parsedJD.responsibilities : [],
         requirements: Array.isArray(parsedJD.requirements) ? parsedJD.requirements : [],
         skills: Array.isArray(parsedJD.skills) ? parsedJD.skills : [],
-        benefits: Array.isArray(parsedJD.benefits) ? parsedJD.benefits : [],
         matchedCandidates,
         databaseInsights,
       }

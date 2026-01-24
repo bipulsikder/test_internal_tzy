@@ -19,6 +19,15 @@ yarn-error.log*
 # env files
 .env*
 
+# local tools
+.trae/
+
+# separate app (hosted elsewhere)
+board-app/
+
+# macOS
+.DS_Store
+
 # vercel
 .vercel
 

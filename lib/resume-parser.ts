@@ -111,6 +111,14 @@ function isValidParsedData(data: any): boolean {
     return false
   }
 
+  // Must have readable resume text content
+  const resumeText = (data.resumeText || "").trim()
+  const resumeTextLooksErroneous = /error|processing error|extraction failed/i.test(resumeText)
+  if (!resumeText || resumeText.length < 50 || resumeTextLooksErroneous) {
+    console.log("❌ Missing or invalid resume content")
+    return false
+  }
+
   // Must have at least one of: email, phone, or current role
   if (!data.email && !data.phone && !data.currentRole) {
     console.log("❌ Missing essential contact/professional information")
@@ -657,65 +665,62 @@ function extractActualPersonName(text: string): string | null {
   
   const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0)
   
-  // Look for name patterns in the first few lines (resume headers)
-  for (let i = 0; i < Math.min(15, lines.length); i++) {
-    const line = lines[i]
-    
-    // Skip common resume headers and non-name content
-    if (line.toLowerCase().includes('resume') || 
-        line.toLowerCase().includes('curriculum') || 
-        line.toLowerCase().includes('vitae') ||
-        line.toLowerCase().includes('cv') ||
-        line.includes('@') ||
-        line.match(/^\d/) ||
-        line.toLowerCase().includes('phone') ||
-        line.toLowerCase().includes('mobile') ||
-        line.toLowerCase().includes('email') ||
-        line.toLowerCase().includes('location') ||
-        line.toLowerCase().includes('address') ||
-        line.toLowerCase().includes('skills') ||
-        line.toLowerCase().includes('experience') ||
-        line.toLowerCase().includes('education') ||
-        line.toLowerCase().includes('projects') ||
-        line.toLowerCase().includes('achievements')) {
-      continue
-    }
-    
-    // Look for name patterns (2-4 words, starts with capital, no special chars)
-    const namePattern = /^[A-Z][a-zA-Z\s]{2,40}$/
-    if (namePattern.test(line) && line.split(' ').length >= 2 && line.split(' ').length <= 4) {
-      // Additional validation: should not contain common non-name words
-      const lowerLine = line.toLowerCase()
-      const nonNameWords = ['railway', 'infrastructure', 'projects', 'tech', 'company', 'ltd', 'pvt', 'inc']
-      if (!nonNameWords.some(word => lowerLine.includes(word))) {
-        return line
-      }
-    }
+  const stopWords = ['resume','curriculum','vitae','cv','skills','experience','education','projects','achievements','objective','summary','profile']
+  const contactPattern = /@|phone|mobile|\+?\d/
+  const topLimit = Math.min(12, lines.length)
+  function isCandidate(s: string) {
+    const w = s.split(/\s+/).filter(Boolean)
+    if (w.length < 2 || w.length > 4) return false
+    if (/^\d|@/.test(s)) return false
+    if (s.length < 3 || s.length > 60) return false
+    const lettersOnly = w.every(t => /^[A-Za-z\-'.]+$/.test(t))
+    return lettersOnly
   }
-  
-  // If no name found in headers, try to find it near contact information
-  for (let i = 0; i < lines.length; i++) {
+  const candidates: { name: string; score: number; idx: number }[] = []
+  for (let i = 0; i < topLimit; i++) {
     const line = lines[i]
-    
-    // Look for contact info patterns
-    if (line.includes('@') || line.match(/\+?\d/) || line.toLowerCase().includes('phone')) {
-      // Check lines above and below for name
+    const lower = line.toLowerCase()
+    if (stopWords.some(k => lower.includes(k))) continue
+    if (!isCandidate(line)) continue
+    let score = 0
+    if (i <= 3) score += 2
+    if (i <= 5) score += 1
+    const next = i + 1 < lines.length ? lines[i + 1].toLowerCase() : ''
+    const prev = i > 0 ? lines[i - 1].toLowerCase() : ''
+    if (contactPattern.test(next) || contactPattern.test(prev)) score += 2
+    const words = line.split(/\s+/)
+    const uppercaseCount = words.filter(w => w === w.toUpperCase()).length
+    if (uppercaseCount === words.length) score += 1
+    candidates.push({ name: line, score, idx: i })
+  }
+  if (candidates.length) {
+    candidates.sort((a, b) => b.score - a.score || a.idx - b.idx)
+    return candidates[0].name
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].toLowerCase()
+    if (contactPattern.test(l)) {
       for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j++) {
-        const checkLine = lines[j].trim()
-        if (checkLine.length > 3 && checkLine.length < 50) {
-          const namePattern = /^[A-Z][a-zA-Z\s]{2,40}$/
-          if (namePattern.test(checkLine) && checkLine.split(' ').length >= 2 && checkLine.split(' ').length <= 4) {
-            const lowerCheckLine = checkLine.toLowerCase()
-            const nonNameWords = ['railway', 'infrastructure', 'projects', 'tech', 'company', 'ltd', 'pvt', 'inc']
-            if (!nonNameWords.some(word => lowerCheckLine.includes(word))) {
-              return checkLine
-            }
-          }
+        const s = lines[j]
+        if (isCandidate(s)) {
+          const lower = s.toLowerCase()
+          if (!stopWords.some(k => lower.includes(k))) return s
         }
       }
     }
   }
-  
+  const emails = text.match(emailRegex) || []
+  if (emails.length) {
+    const firstEmail = emails[0]
+    if (firstEmail) {
+      const local = firstEmail.split('@')[0]
+      const parts = local.split(/[._-]+/).filter(Boolean)
+      if (parts.length >= 2 && parts.length <= 4) {
+        const name = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ')
+        return name
+      }
+    }
+  }
   return null
 }
 
@@ -2739,5 +2744,3 @@ function cleanArray(value: any): string[] {
 }
 
 // Parse resume using OpenAI GPT-3.5-turbo (Free tier alternative)
-
-

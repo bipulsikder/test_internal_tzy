@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react"
+"use client"
+
+import { useMemo, useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -6,9 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Badge } from "@/components/ui/badge"
 import { Plus, Search, MapPin, Briefcase, Users, Clock, MoreHorizontal } from "lucide-react"
 import { CreateJobDialog } from "./create-job-dialog"
-import { JobDetails } from "./job-details"
 import { formatDistanceToNow } from "date-fns"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 interface Job {
   id: string
@@ -22,6 +24,9 @@ interface Job {
   created_at: string
   positions?: number
   client_name?: string
+  client_id?: string | null
+  amount?: string | null
+  skills_required?: string[] | null
   experience?: string
 }
 
@@ -29,7 +34,9 @@ export function JobsDashboard() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [selectedJob, setSelectedJob] = useState<Job | null>(null)
+  const [clients, setClients] = useState<{ id: string; name: string; slug: string }[]>([])
+  const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [clientFilter, setClientFilter] = useState<string>("all")
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editingJob, setEditingJob] = useState<Job | null>(null)
@@ -40,7 +47,18 @@ export function JobsDashboard() {
 
   useEffect(() => {
     fetchJobs()
+    fetchClients()
   }, [])
+
+  const fetchClients = async () => {
+    try {
+      const res = await fetch("/api/clients")
+      const data = res.ok ? await res.json() : []
+      setClients(Array.isArray(data) ? data.map((c: any) => ({ id: c.id, name: c.name, slug: c.slug })) : [])
+    } catch {
+      setClients([])
+    }
+  }
 
   const fetchJobs = async () => {
     setLoading(true)
@@ -78,15 +96,27 @@ export function JobsDashboard() {
     }
   }
 
-  const filteredJobs = jobs.filter(job => 
-    job.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    job.department.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    job.location.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const clientsById = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients])
 
-  if (selectedJob) {
-    return <JobDetails job={selectedJob} onBack={() => setSelectedJob(null)} />
-  }
+  const filteredJobs = jobs
+    .filter((job) => {
+      if (statusFilter === "all") return true
+      return job.status === statusFilter
+    })
+    .filter((job) => {
+      if (clientFilter === "all") return true
+      return (job.client_id || "") === clientFilter
+    })
+    .filter((job) => {
+      const q = searchQuery.toLowerCase()
+      return (
+        job.title.toLowerCase().includes(q) ||
+        job.department.toLowerCase().includes(q) ||
+        job.location.toLowerCase().includes(q) ||
+        (job.client_name || "").toLowerCase().includes(q) ||
+        (job.client_id && clientsById.get(job.client_id)?.name.toLowerCase().includes(q))
+      )
+    })
 
   return (
     <div className="space-y-6">
@@ -126,6 +156,9 @@ export function JobsDashboard() {
               salary_range: (editingJob as any).salary_range,
               positions: (editingJob as any).positions,
               client_name: (editingJob as any).client_name,
+              client_id: (editingJob as any).client_id,
+              amount: (editingJob as any).amount,
+              skills_required: (editingJob as any).skills_required,
               experience: (editingJob as any).experience,
             }}
           />
@@ -142,6 +175,35 @@ export function JobsDashboard() {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
+
+        <div className="w-[180px]">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger>
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="open">Open</SelectItem>
+              <SelectItem value="inactive">Closed</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="w-[240px]">
+          <Select value={clientFilter} onValueChange={setClientFilter}>
+            <SelectTrigger>
+              <SelectValue placeholder="Client" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All clients</SelectItem>
+              {clients.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {loading ? (
@@ -153,7 +215,7 @@ export function JobsDashboard() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredJobs.map(job => (
-            <Card key={job.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setSelectedJob(job)}>
+            <Card key={job.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/jobs/${job.id}`)}>
               <CardHeader className="pb-2">
                 <div className="flex justify-between items-start">
                   <div className="flex items-center gap-2">
@@ -195,7 +257,12 @@ export function JobsDashboard() {
                   </DropdownMenu>
                 </div>
                 <CardTitle className="text-lg line-clamp-1">{job.title}</CardTitle>
-                <CardDescription className="line-clamp-1">{job.department}</CardDescription>
+                <CardDescription className="line-clamp-1">
+                  {(job.client_id && clientsById.get(job.client_id)?.name) || job.client_name ? (
+                    <span className="mr-2">{(job.client_id && clientsById.get(job.client_id)?.name) || job.client_name}</span>
+                  ) : null}
+                  <span>{job.department}</span>
+                </CardDescription>
               </CardHeader>
               <CardContent className="pb-2">
                 <div className="space-y-2 text-sm text-muted-foreground">
@@ -210,7 +277,7 @@ export function JobsDashboard() {
                 </div>
               </CardContent>
               <CardFooter className="pt-2 flex gap-2">
-                <Button variant="ghost" className="w-full text-blue-600 hover:text-blue-800 hover:bg-blue-50" onClick={(e) => { e.stopPropagation(); setSelectedJob(job) }}>
+                <Button variant="ghost" className="w-full text-blue-600 hover:text-blue-800 hover:bg-blue-50" onClick={(e) => { e.stopPropagation(); router.push(`/jobs/${job.id}?tab=all`) }}>
                   View Applicants ({appCounts[job.id] || 0}) {pendingCounts[job.id] ? ` • ${pendingCounts[job.id]} pending` : ""}
                 </Button>
                 <Button variant="outline" className="w-full" onClick={(e) => { e.stopPropagation(); window.open(`/jobs/${job.id}/matches`, '_blank') }}>
