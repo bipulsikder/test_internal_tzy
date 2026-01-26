@@ -1,6 +1,14 @@
 # Truckinzy Platform
 
-A comprehensive resume parsing and candidate management platform built with Next.js, featuring AI-powered resume analysis and Google Sheets integration.
+This repo contains the **internal admin app** for Truckinzy plus shared backend code.
+
+If you are new to the project, start here:
+
+- **Non‑technical product overview**: [docs/product-overview.md](docs/product-overview.md)
+- **Internal app architecture (for engineers)**: [docs/internal-architecture.md](docs/internal-architecture.md)
+- **Board app architecture (candidate‑facing, separate repo)**: `board-app/docs/board-app-architecture.md` (mirrored here for reference)
+
+Below is the original description of the resume upload flow, which is still valid.
 
 ## 🚀 New Resume Upload Flow
 
