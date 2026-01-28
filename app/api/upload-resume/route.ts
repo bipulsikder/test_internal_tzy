@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
             "Check if the file is corrupted or password protected",
             "Ensure the file contains readable text content",
             "Try converting the file to a different format (PDF/DOCX)",
-            "Verify the file is not an image-only PDF"
+            "If the PDF is scanned/image-based, ensure Gemini OCR is enabled (GEMINI_API_KEY)"
           ],
           timestamp: new Date().toISOString()
         }, { status: 422 })
@@ -160,7 +160,7 @@ export async function POST(request: NextRequest) {
           fileType: file.type,
           fileSize: file.size,
           suggestions: [
-            "Upload a selectable-text PDF (not scanned image-only)",
+            "If the PDF is scanned/image-based, ensure Gemini OCR is enabled (GEMINI_API_KEY)",
             "If DOC/DOCX, re-save as PDF and try again",
             "Ensure the file is not password protected",
             "Avoid uploading screenshots or photos of resumes"
@@ -193,7 +193,7 @@ export async function POST(request: NextRequest) {
             "Ensure the resume contains a valid candidate name",
             "Include an email or phone number in the resume",
             "Upload a PDF for best parsing accuracy",
-            isDocx ? "Consider converting DOCX to PDF for improved parsing" : "Ensure text is selectable (not image-only)"
+            isDocx ? "Consider converting DOCX to PDF for improved parsing" : "If the PDF is scanned/image-based, enable Gemini OCR (GEMINI_API_KEY)"
           ],
           timestamp: new Date().toISOString(),
           resultType: "blocked",
@@ -308,7 +308,7 @@ export async function POST(request: NextRequest) {
 
       // Generate embedding for vector search (optional)
       console.log("Generating embedding...")
-      let embedding = []
+      let embedding: number[] = []
       try {
         embedding = await generateEmbedding(parsedData.resumeText || "")
         console.log("✅ Embedding generated successfully")
@@ -368,6 +368,9 @@ export async function POST(request: NextRequest) {
         fileName: file.name,
         fileUrl: fileUrl, // URL to access file in Supabase storage
         filePath: filePath,
+
+        // Vector embedding (optional)
+        embedding,
 
         // System Fields
         status: "new" as const,
@@ -560,7 +563,7 @@ export async function POST(request: NextRequest) {
 
       // Generate embedding for vector search (optional)
       console.log("Generating embedding...")
-      let embedding = []
+      let embedding: number[] = []
       try {
         embedding = await generateEmbedding(parsedData.resumeText || "")
         console.log("✅ Embedding generated successfully")

@@ -167,7 +167,7 @@ async function processFile(
 
     // Generate embedding for vector search (optional)
     console.log('Generating embedding...');
-    let embedding = [];
+    let embedding: number[] = [];
     try {
       embedding = await generateEmbedding(parsedData.resumeText);
       console.log('✅ Embedding generated successfully');
@@ -227,6 +227,9 @@ async function processFile(
       fileName: file.name,
       filePath: filePath,
       fileUrl: fileUrl,
+
+      // Vector embedding (optional)
+      embedding,
 
       // System Fields
       status: 'new' as const,

@@ -99,6 +99,22 @@ export async function parseResume(file: any): Promise<ComprehensiveCandidateData
   }
 }
 
+function testRegexOnce(pattern: RegExp, value: string): boolean {
+  const flags = pattern.flags.replace(/g/g, "")
+  const re = new RegExp(pattern.source, flags)
+  return re.test(value)
+}
+
+function isNameConsistentWithText(name: string, resumeText: string): boolean {
+  const n = (name || "").trim().toLowerCase()
+  const t = (resumeText || "").trim().toLowerCase()
+  if (!n || !t) return false
+  const tokens = n.split(/\s+/).filter((x) => x.length >= 3)
+  if (!tokens.length) return false
+  const hits = tokens.filter((tok) => t.includes(tok)).length
+  return hits >= Math.min(2, tokens.length) || hits >= 1
+}
+
 // Function to validate parsed data quality with confidence scoring
 function isValidParsedData(data: any): boolean {
   // Must have a valid name (not empty, not "unknown", not just whitespace)
@@ -125,13 +141,19 @@ function isValidParsedData(data: any): boolean {
     return false
   }
 
+  // Guard against hallucinated identity: extracted name must exist in resume text
+  if (!isNameConsistentWithText(String(data.name || ""), resumeText)) {
+    console.log("❌ Name does not match resume text:", data.name)
+    return false
+  }
+
   // Calculate a confidence score based on data completeness
   let confidenceScore = 0;
   
   // Core fields - higher weight
   if (data.name && data.name.trim().length > 2) confidenceScore += 20;
-  if (data.email && emailRegex.test(data.email)) confidenceScore += 15;
-  if (data.phone && phoneRegex.test(data.phone)) confidenceScore += 15;
+  if (data.email && testRegexOnce(emailRegex, String(data.email))) confidenceScore += 15;
+  if (data.phone && testRegexOnce(phoneRegex, String(data.phone))) confidenceScore += 15;
   if (data.currentRole && data.currentRole.trim().length > 2) confidenceScore += 10;
   if (data.currentCompany && data.currentCompany.trim().length > 2) confidenceScore += 10;
   
@@ -208,13 +230,15 @@ NAME EXTRACTION RULES:
 - Look for the person's name at the very top of the resume, usually in large/bold text
 - Common patterns: "Name: [Name]", "Full Name: [Name]", or just the name prominently displayed
 - The name is usually the first thing you see, not project names or company names
-- If you see "Bipul Sikder" at the top, that's the name, not "Railway infrastructure projects"
+- Do not confuse headings, companies, job titles, or projects as the person's name
 - Look for personal contact information section which usually contains the name
 - The name is typically followed by contact details like phone, email, or address
 - DO NOT extract project names, company names, or other text as the person's name
 - The name should be a person's name (2-4 words), not a company, project, or section header
-- Common Indian names like "Bipul Sikder", "Deepak Kumar", "Priya Sharma" are what you're looking for
-- If you see text like "Railway infrastructure projects" or "Tech Lead", that's NOT a person's name
+- If you are not sure of the name, return an empty string for "name" instead of guessing
+
+ANTI-HALLUCINATION RULE:
+- You MUST ONLY extract facts that appear in the provided RESUME TEXT. Do not invent or assume anything.
 
 EXTRACT THESE FIELDS WITH HIGH ACCURACY:
 {
@@ -407,6 +431,29 @@ Return ONLY the JSON object:`
           keyAchievements: cleanArray(parsedData.keyAchievements),
           projects: cleanArray(parsedData.projects),
           summary: cleanString(parsedData.summary)
+        }
+
+        const emailsInText = (text.match(emailRegex) || []).map((e) => e.trim()).filter(Boolean)
+        const phonesInText = (text.match(phoneRegex) || []).map((p) => p.trim()).filter(Boolean)
+        const emailFromText = emailsInText.length ? emailsInText[0] : ""
+        const phoneFromText = phonesInText.sort((a, b) => b.length - a.length)[0] || ""
+
+        if (emailFromText && (!cleanedData.email || !text.toLowerCase().includes(cleanedData.email.toLowerCase()))) {
+          cleanedData.email = emailFromText
+          console.log("✅ Email corrected from resume text:", cleanedData.email)
+        }
+
+        if (phoneFromText && (!cleanedData.phone || !text.includes(cleanedData.phone))) {
+          cleanedData.phone = phoneFromText
+          console.log("✅ Phone corrected from resume text:", cleanedData.phone)
+        }
+
+        if (cleanedData.name && !isNameConsistentWithText(cleanedData.name, text)) {
+          const actualName = extractActualPersonName(text) || extractNameFromText(text)
+          if (actualName) {
+            cleanedData.name = actualName
+            console.log("✅ Name corrected from resume text:", cleanedData.name)
+          }
         }
 
         // Enhanced validation and correction
@@ -2117,7 +2164,24 @@ async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
     // Use pdf-parse for robust PDF text extraction
     const data = await pdfParse(Buffer.from(arrayBuffer))
-    return sanitizeExtractedText(data.text)
+    const text = sanitizeExtractedText(data.text)
+    if (text && text.length >= 80) {
+      return text
+    }
+
+    // If the PDF is scanned/image-based, pdf-parse often returns little or no text.
+    // Try Gemini on the PDF bytes to OCR/extract visible text.
+    if (genAI) {
+      try {
+        const ocrText = await extractPDFTextWithGemini(arrayBuffer)
+        const out = sanitizeExtractedText(ocrText)
+        return out.length > text.length ? out : text
+      } catch (e) {
+        console.warn("⚠️ Gemini PDF OCR failed:", e)
+      }
+    }
+
+    return text
   } catch (error) {
     console.error("PDF extraction error with pdf-parse:", error)
     // Fallback to basic text extraction if pdf-parse fails
@@ -2126,6 +2190,30 @@ async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
     const readableText = sanitizeExtractedText(text)
     return readableText.length > 50 ? readableText : `PDF processing error: ${error}`
   }
+}
+
+async function extractPDFTextWithGemini(arrayBuffer: ArrayBuffer): Promise<string> {
+  if (!genAI) {
+    throw new Error("Gemini API not configured")
+  }
+  const modelName = process.env.GEMINI_OCR_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
+  const model = genAI.getGenerativeModel({ model: modelName })
+  const pdfBase64 = Buffer.from(arrayBuffer).toString("base64")
+
+  const prompt =
+    "Extract all visible text from this resume PDF. Return plain text only with line breaks. Do not add, infer, or rename anything. If no text is readable, return an empty string."
+
+  const result = await model.generateContent([
+    prompt,
+    {
+      inlineData: {
+        data: pdfBase64,
+        mimeType: "application/pdf",
+      },
+    },
+  ])
+
+  return result.response.text()
 }
 
 async function extractDocxText(arrayBuffer: ArrayBuffer): Promise<string> {
@@ -2388,12 +2476,11 @@ NAME EXTRACTION RULES:
 - Look for the person's name at the very top of the resume, usually in large/bold text
 - Common patterns: "Name: [Name]", "Full Name: [Name]", or just the name prominently displayed
 - The name is usually the first thing you see, not project names or company names
-- If you see "Bipul Sikder" at the top, that's the name, not "Railway infrastructure projects"
+- Do not confuse headings, companies, job titles, or projects as the person's name
 - Look for personal contact information section which usually contains the name
 - The name is typically followed by contact details like phone, email, or address
 - DO NOT extract project names, company names, or other text as the person's name
 - The name should be a person's name (2-4 words), not a company, project, or section header
-- Common Indian names like "Bipul Sikder", "Deepak Kumar", "Priya Sharma" are what you're looking for
 - If you see text like "Railway infrastructure projects" or "Tech Lead", that's NOT a person's name
 
 EXTRACT THESE FIELDS WITH HIGH ACCURACY:

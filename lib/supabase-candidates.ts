@@ -131,7 +131,7 @@ export class SupabaseCandidateService {
       parsing_confidence: 0.95, // Default confidence
       parsing_errors: [],
       uploaded_by: candidate.uploadedBy || null,
-      embedding: candidate.embedding ? (Array.isArray(candidate.embedding) ? JSON.stringify(candidate.embedding) : candidate.embedding) : null,
+      embedding: Array.isArray(candidate.embedding) ? (candidate.embedding as any) : null,
     }
   }
 
@@ -649,7 +649,7 @@ export class SupabaseCandidateService {
       if (updates.feedback !== undefined) updateData.feedback = updates.feedback
       if (updates.uploadedBy !== undefined) updateData.uploaded_by = updates.uploadedBy
       if (updates.embedding !== undefined) {
-        updateData.embedding = updates.embedding ? (Array.isArray(updates.embedding) ? JSON.stringify(updates.embedding) : updates.embedding) : null
+        updateData.embedding = Array.isArray(updates.embedding) ? (updates.embedding as any) : null
       }
       
       // Handle timestamp safely: avoid sending empty string to timestamptz column
