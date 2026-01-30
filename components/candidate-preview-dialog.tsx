@@ -181,22 +181,28 @@ export function CandidatePreviewDialog({
     }
   }, [candidate, isOpen])
 
+  const normalizeCandidateForPreview = (c: any) => {
+    const fileUrl = c?.fileUrl || c?.file_url || ""
+    const fileName = c?.fileName || c?.file_name || ""
+    const resumeText = c?.resumeText || c?.resume_text || ""
+    return { ...c, fileUrl, fileName, resumeText }
+  }
+
   useEffect(() => {
-    const activeCandidate = fetchedCandidate || candidate
+    const activeCandidate = normalizeCandidateForPreview(fetchedCandidate || candidate)
     if (activeCandidate) {
       // Generate preview URL for DOCX files
       const generatePreviewUrl = async () => {
         if (activeCandidate.fileUrl && activeCandidate.fileName) {
           if (isDocxFile(activeCandidate.fileUrl, activeCandidate.fileName)) {
             try {
-              const url = await createPreviewUrl(activeCandidate.fileUrl, activeCandidate.fileName);
-              setPreviewUrl(url);
+              const url = await createPreviewUrl(activeCandidate.fileUrl, activeCandidate.fileName)
+              setPreviewUrl(url)
             } catch (error) {
-              console.error('Error generating preview URL:', error);
-              setPreviewUrl(activeCandidate.fileUrl); // Fallback to original URL
+              setPreviewUrl(activeCandidate.fileUrl)
             }
           } else {
-            setPreviewUrl(activeCandidate.fileUrl); // Use original URL for non-DOCX files
+            setPreviewUrl(activeCandidate.fileUrl)
           }
         }
       };
@@ -209,7 +215,7 @@ export function CandidatePreviewDialog({
 
   // Ensure all array properties have default values to prevent map errors
   // Use fetchedCandidate if available, otherwise use candidate prop
-  const sourceCandidate = fetchedCandidate || candidate
+  const sourceCandidate = normalizeCandidateForPreview(fetchedCandidate || candidate)
   const safeCandidate = {
     ...sourceCandidate,
     technicalSkills: Array.isArray(sourceCandidate.technicalSkills) ? sourceCandidate.technicalSkills : [],

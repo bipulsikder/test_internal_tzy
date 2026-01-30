@@ -1,5 +1,7 @@
 import { supabase, supabaseAdmin } from './supabase'
 
+export const BUCKET_NAME = 'resume-files'
+
 /**
  * Check if a file exists in Supabase Storage by name or path
  * @param fileName The file name or path to check
@@ -11,7 +13,7 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
     
     // List all files in the bucket using admin client to bypass RLS
     const { data: files, error } = await supabaseAdmin.storage
-      .from('resume-files')
+      .from(BUCKET_NAME)
       .list()
     
     if (error) {
@@ -35,7 +37,7 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
       
       // Get the public URL
       const { data: { publicUrl } } = supabaseAdmin.storage
-        .from('resume-files')
+        .from(BUCKET_NAME)
         .getPublicUrl(existingFile.name)
       
       return { 
@@ -62,14 +64,14 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
  */
 export async function uploadFileToSupabase(file: File | Blob, fileName: string): Promise<{ url: string; path: string }> {
   try {
-    console.log(`Uploading file to Supabase Storage: ${fileName}`)
-    
+    const contentType = (file as any)?.type || undefined
     // Upload the file using admin client to bypass RLS policies
     const { data, error } = await supabaseAdmin.storage
-      .from('resume-files')
+      .from(BUCKET_NAME)
       .upload(fileName, file, {
         cacheControl: '3600',
-        upsert: false
+        upsert: true,
+        ...(contentType ? { contentType } : {}),
       })
     
     if (error) {
@@ -79,10 +81,9 @@ export async function uploadFileToSupabase(file: File | Blob, fileName: string):
     
     // Get the public URL
     const { data: { publicUrl } } = supabaseAdmin.storage
-      .from('resume-files')
+      .from(BUCKET_NAME)
       .getPublicUrl(data.path)
     
-    console.log(`✅ File uploaded to Supabase Storage: ${publicUrl}`)
     return { url: publicUrl, path: data.path }
   } catch (error) {
     console.error('❌ Failed to upload to Supabase Storage:', error)
@@ -107,7 +108,7 @@ export async function deleteFileFromSupabase(url: string): Promise<boolean> {
     
     // Delete the file using admin client to bypass RLS
     const { error } = await supabaseAdmin.storage
-      .from('resume-files')
+      .from(BUCKET_NAME)
       .remove([path])
     
     if (error) {

@@ -3,6 +3,71 @@ import { SupabaseCandidateService } from "./supabase-candidates"
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "")
 const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash"
+const DEFAULT_GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001"
+const EMBEDDING_DIM = Number(process.env.EMBEDDING_DIM || 768)
+
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms))
+}
+
+async function embedWithGeminiRest(input: string, model: string): Promise<number[]> {
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) throw new Error("GEMINI_API_KEY not configured")
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent`
+  const body: any = {
+    model: `models/${model}`,
+    content: { parts: [{ text: input }] },
+  }
+
+  if (Number.isFinite(EMBEDDING_DIM) && EMBEDDING_DIM > 0) {
+    body.output_dimensionality = EMBEDDING_DIM
+  }
+
+  const doRequest = async () => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify(body),
+    })
+
+    const json = await res.json().catch(() => null)
+    if (!res.ok) {
+      const msg = json?.error?.message || res.statusText || "Embedding request failed"
+      const err = new Error(`[Gemini Embedding Error] ${res.status} ${msg}`)
+      ;(err as any).status = res.status
+      ;(err as any).details = json
+      throw err
+    }
+
+    const values =
+      json?.embedding?.values ||
+      json?.embeddings?.[0]?.values ||
+      json?.data?.[0]?.embedding?.values ||
+      null
+
+    if (!Array.isArray(values)) {
+      throw new Error("Embedding response missing vector values")
+    }
+    return values.map((v: any) => Number(v)).filter((v: any) => Number.isFinite(v))
+  }
+
+  try {
+    return await doRequest()
+  } catch (e: any) {
+    const msg = String(e?.message || e)
+    const status = Number(e?.status || 0)
+    const isTransient = status === 429 || status === 503 || /overloaded|timeout|temporarily unavailable/i.test(msg)
+    if (isTransient) {
+      await sleep(600)
+      return await doRequest()
+    }
+    throw e
+  }
+}
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   console.log("=== Generating Embedding ===")
@@ -16,12 +81,36 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: "text-embedding-004" })
-    const result = await model.embedContent(input)
-    const embedding = result.embedding
+    const candidates = [DEFAULT_GEMINI_EMBEDDING_MODEL, "text-embedding-004", "embedding-001"].filter(Boolean)
+    let lastErr: unknown = null
 
-    console.log("✅ Embedding generated successfully")
-    return embedding.values || []
+    for (const model of candidates) {
+      try {
+        const embedding = await embedWithGeminiRest(input, model)
+
+        if (!embedding.length) {
+          throw new Error("Embedding vector is empty")
+        }
+
+        if (Number.isFinite(EMBEDDING_DIM) && EMBEDDING_DIM > 0) {
+          if (embedding.length > EMBEDDING_DIM) {
+            console.warn(`⚠️ Embedding length ${embedding.length} > ${EMBEDDING_DIM}; truncating to match DB`)
+            return embedding.slice(0, EMBEDDING_DIM)
+          }
+          if (embedding.length < EMBEDDING_DIM) {
+            throw new Error(`Embedding length ${embedding.length} < expected ${EMBEDDING_DIM}`)
+          }
+        }
+
+        console.log("✅ Embedding generated successfully")
+        return embedding
+      } catch (err) {
+        lastErr = err
+        console.warn(`⚠️ Embedding model failed (${model}), trying next...`, err)
+      }
+    }
+
+    throw lastErr || new Error("All embedding models failed")
   } catch (error) {
     console.error("❌ Embedding generation failed:", error)
     throw error

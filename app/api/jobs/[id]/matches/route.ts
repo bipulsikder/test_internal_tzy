@@ -98,8 +98,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           .from("candidates")
           .select("*")
           .in("id", ids)
-        const map = new Map((cands || []).map(c => [c.id, c]))
-        items = pageItems.map(m => ({ ...m, candidate: map.get(m.candidate_id) }))
+        const map = new Map((cands || []).map((c: any) => [c.id, SupabaseCandidateService.mapRowToCandidate(c)]))
+        items = pageItems.map(m => ({ ...m, candidate: map.get(m.candidate_id) || null }))
       } catch (_ignore) {}
     }
 

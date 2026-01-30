@@ -7,86 +7,129 @@ import { ComprehensiveCandidateData } from "./types"
 import axios from "axios"
 
 const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null
-const openRouterApiKey = process.env.OPENROUTER_API_KEY || "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"
+const openRouterApiKey = process.env.OPENROUTER_API_KEY || ""
+
+let lastGeminiCallAt = 0
+let geminiCallChain: Promise<void> = Promise.resolve()
+
+async function geminiBackoffWait(attempt: number) {
+  const base = 800
+  const jitter = Math.floor(Math.random() * 250)
+  const ms = base * Math.pow(2, attempt) + jitter
+  await new Promise((r) => setTimeout(r, ms))
+}
+
+async function geminiBackoffWaitFor(status: number, attempt: number) {
+  const base = status === 429 ? 3000 : 800
+  const jitter = Math.floor(Math.random() * 350)
+  const ms = base * Math.pow(2, attempt) + jitter
+  await new Promise((r) => setTimeout(r, ms))
+}
+
+async function enforceMinGeminiSpacing(minMs = 700) {
+  const now = Date.now()
+  const wait = lastGeminiCallAt ? Math.max(0, minMs - (now - lastGeminiCallAt)) : 0
+  if (wait > 0) {
+    await new Promise((r) => setTimeout(r, wait))
+  }
+  lastGeminiCallAt = Date.now()
+}
+
+function getGeminiErrorStatus(e: any): number {
+  return Number(e?.status || e?.response?.status || 0)
+}
+
+function isTransientGeminiError(e: any): boolean {
+  const status = getGeminiErrorStatus(e)
+  const msg = String(e?.message || e)
+  return (
+    status === 429 ||
+    status === 503 ||
+    status === 504 ||
+    /overloaded|resource exhausted|try again later|timeout/i.test(msg)
+  )
+}
+
+async function runGeminiCall<T>(
+  fn: () => Promise<T>,
+  opts?: { minSpacingMs?: number; maxAttempts?: number },
+): Promise<T> {
+  const minSpacingMs = typeof opts?.minSpacingMs === "number" ? opts.minSpacingMs : 900
+  const maxAttempts = typeof opts?.maxAttempts === "number" ? opts.maxAttempts : 5
+
+  const run = async () => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        await enforceMinGeminiSpacing(minSpacingMs)
+        return await fn()
+      } catch (e: any) {
+        if (isTransientGeminiError(e) && attempt < maxAttempts - 1) {
+          const status = getGeminiErrorStatus(e)
+          await geminiBackoffWaitFor(status, attempt)
+          continue
+        }
+        throw e
+      }
+    }
+    throw new Error("Gemini request failed after retries")
+  }
+
+  const p = geminiCallChain.then(run, run)
+  geminiCallChain = p.then(
+    () => undefined,
+    () => undefined,
+  )
+  return p
+}
 
 export async function parseResume(file: any): Promise<ComprehensiveCandidateData> {
   try {
     console.log(`=== Starting Resume Parsing for ${file.name} ===`)
-    
-    // First try OpenRouter parsing for docx files
-    if (file.name.toLowerCase().endsWith('.docx')) {
-      try {
-        if (openRouterApiKey) {
-          console.log("Attempting OpenRouter parsing for DOCX file...")
-          const result = await parseResumeWithOpenRouter(file)
-          if (isValidParsedData(result)) {
-            console.log("✅ OpenRouter parsing successful")
-            return {
-              ...result,
-              filePath: "",
-              fileUrl: ""
-            } as unknown as ComprehensiveCandidateData
-          } else {
-            console.log("⚠️ OpenRouter parsing failed validation, trying Gemini...")
-          }
-        }
-      } catch (error) {
-        console.log("⚠️ OpenRouter parsing failed:", error)
-      }
-    }
-    
-    // Also try OpenRouter for PDF files if Gemini API key is not available
-    if (file.name.toLowerCase().endsWith('.pdf') && (!genAI || !process.env.GEMINI_API_KEY)) {
-      try {
-        if (openRouterApiKey) {
-          console.log("Gemini API not available. Attempting OpenRouter parsing for PDF file...")
-          const result = await parseResumeWithOpenRouter(file)
-          if (isValidParsedData(result)) {
-            console.log("✅ OpenRouter parsing successful for PDF")
-            return {
-              ...result,
-              filePath: "",
-              fileUrl: ""
-            } as unknown as ComprehensiveCandidateData
-          } else {
-            console.log("⚠️ OpenRouter parsing failed validation for PDF, trying basic parsing...")
-          }
-        }
-      } catch (error) {
-        console.log("⚠️ OpenRouter parsing failed for PDF:", error)
-      }
-    }
-    
+
+    const extractedText = await extractTextFromFile(file)
+
+    let geminiUnavailableReason: string | null = null
+
     // Try Gemini parsing
     try {
       if (genAI) {
         console.log("Attempting Gemini parsing...")
-        const result = await parseResumeWithGemini(file)
+        const result = await parseResumeWithGemini(file, extractedText)
         if (isValidParsedData(result)) {
           console.log("✅ Gemini parsing successful")
           return {
             ...result,
             filePath: "",
-            fileUrl: ""
+            fileUrl: "",
+            parsing_method: "gemini",
+            parsing_confidence: 0.95,
+            parsing_errors: [],
           } as unknown as ComprehensiveCandidateData
         } else {
           console.log("⚠️ Gemini parsing failed validation, trying basic parsing...")
         }
       }
-    } catch (error) {
-      console.log("⚠️ Gemini parsing failed:", error)
+    } catch (error: any) {
+      const status = Number(error?.status || error?.response?.status || 0)
+      if (status === 429) geminiUnavailableReason = "gemini_rate_limited"
+      if (status === 503) geminiUnavailableReason = "gemini_overloaded"
+      const msg = String(error?.message || error)
+      console.log(`⚠️ Gemini parsing failed (${status || "unknown"}): ${msg}`)
     }
 
     // Fallback to enhanced basic parsing
     console.log("Falling back to enhanced basic parsing...")
-    const result = await parseResumeBasic(file)
+    const result = await parseResumeBasic(file, extractedText)
     
     if (isValidParsedData(result)) {
       console.log("✅ Enhanced basic parsing successful")
       return {
         ...result,
         filePath: "",
-        fileUrl: ""
+        fileUrl: "",
+        parsing_method: "basic",
+        parsing_confidence: 0.6,
+        parsing_errors: geminiUnavailableReason ? [geminiUnavailableReason] : [],
       } as unknown as ComprehensiveCandidateData
     } else {
       console.log("❌ All parsing methods failed validation")
@@ -94,7 +137,8 @@ export async function parseResume(file: any): Promise<ComprehensiveCandidateData
     }
     
   } catch (error) {
-    console.error("❌ Resume parsing completely failed:", error)
+    const msg = error instanceof Error ? error.message : String(error)
+    console.error(`❌ Resume parsing completely failed: ${msg}`)
     throw error
   }
 }
@@ -103,6 +147,17 @@ function testRegexOnce(pattern: RegExp, value: string): boolean {
   const flags = pattern.flags.replace(/g/g, "")
   const re = new RegExp(pattern.source, flags)
   return re.test(value)
+}
+
+function looksLikePdfStructure(text: string): boolean {
+  const t = String(text || "")
+  const head = t.slice(0, 2200)
+  if (!head) return false
+  if (/%PDF-\d/i.test(head)) return true
+  if (/\b(xref|startxref|endobj|obj\s*<<|trailer\s*<<)\b/i.test(head)) return true
+  const letters = (head.match(/[A-Za-z]/g) || []).length
+  const ratio = letters / Math.max(1, head.length)
+  return head.length > 600 && ratio < 0.18
 }
 
 function isNameConsistentWithText(name: string, resumeText: string): boolean {
@@ -130,7 +185,8 @@ function isValidParsedData(data: any): boolean {
   // Must have readable resume text content
   const resumeText = (data.resumeText || "").trim()
   const resumeTextLooksErroneous = /error|processing error|extraction failed/i.test(resumeText)
-  if (!resumeText || resumeText.length < 50 || resumeTextLooksErroneous) {
+  const resumeTextLooksPdf = looksLikePdfStructure(resumeText)
+  if (!resumeText || resumeText.length < 50 || resumeTextLooksErroneous || resumeTextLooksPdf) {
     console.log("❌ Missing or invalid resume content")
     return false
   }
@@ -195,14 +251,14 @@ function isValidParsedData(data: any): boolean {
 }
 
 // Parse resume using Google Gemini
-async function parseResumeWithGemini(file: File): Promise<ComprehensiveCandidateData> {
+async function parseResumeWithGemini(file: File, preExtractedText?: string): Promise<ComprehensiveCandidateData> {
   if (!genAI) {
     throw new Error("Gemini API not configured")
   }
     
   try {
     console.log("🔄 Starting Gemini parsing...")
-    const text = await extractTextFromFile(file)
+    const text = typeof preExtractedText === "string" ? preExtractedText : await extractTextFromFile(file)
     console.log(`📄 Extracted text length: ${text.length} characters`)
     console.log(`📄 First 200 characters: ${text.substring(0, 200)}...`)
 
@@ -302,7 +358,10 @@ Return ONLY the JSON object:`
           model: modelName
         })
         
-        const result = await model.generateContent(prompt)
+        const result: any = await runGeminiCall(() => model.generateContent(prompt), {
+          minSpacingMs: 900,
+          maxAttempts: 5,
+        })
         const content = result.response.text()
         
         console.log("Raw Gemini response:", content)
@@ -1576,11 +1635,11 @@ function extractSummary(text: string): string {
   return ""
 }
 
-async function parseResumeBasic(file: File) {
+async function parseResumeBasic(file: File, preExtractedText?: string) {
   console.log("Using enhanced basic parsing method...")
 
   try {
-    const text = await extractTextFromFile(file)
+    const text = typeof preExtractedText === "string" ? preExtractedText : await extractTextFromFile(file)
     console.log("Basic parsing - extracted text length:", text.length)
 
     // Enhanced name extraction - look for actual person names, not section headers
@@ -2038,7 +2097,8 @@ async function parseResumeBasic(file: File) {
     
     return parsedData
   } catch (error) {
-    console.error("❌ Enhanced basic parsing failed:", error)
+    const msg = error instanceof Error ? error.message : String(error)
+    console.error(`❌ Enhanced basic parsing failed: ${msg}`)
     throw error
   }
 }
@@ -2065,7 +2125,7 @@ async function extractTextFromFile(file: File): Promise<string> {
       console.log("📄 Processing as PDF file...")
       const arrayBuffer = await file.arrayBuffer()
       const text = await extractPDFText(arrayBuffer)
-      console.log("✅ PDF text extracted")
+      console.log(`✅ PDF text extracted (${text.length} chars)`)
       return text
     }
     
@@ -2112,12 +2172,12 @@ async function extractTextFromFile(file: File): Promise<string> {
     throw new Error(`Unsupported file type: ${file.type}. Supported types: PDF, DOCX, DOC, TXT`)
     
   } catch (error) {
-    console.error("❌ Text extraction error:", error)
+    const msg = error instanceof Error ? error.message : String(error)
+    console.error(`❌ Text extraction error: ${msg}`)
     console.error(`File: ${file.name}, Type: ${file.type}, Size: ${file.size}`)
     
     // Return a more helpful error message
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return `Error extracting text from ${file.name}: ${errorMessage}`
+    return `Error extracting text from ${file.name}: ${msg}`
   }
 }
 
@@ -2165,7 +2225,7 @@ async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
     // Use pdf-parse for robust PDF text extraction
     const data = await pdfParse(Buffer.from(arrayBuffer))
     const text = sanitizeExtractedText(data.text)
-    if (text && text.length >= 80) {
+    if (text && text.length >= 80 && !looksLikePdfStructure(text)) {
       return text
     }
 
@@ -2175,20 +2235,31 @@ async function extractPDFText(arrayBuffer: ArrayBuffer): Promise<string> {
       try {
         const ocrText = await extractPDFTextWithGemini(arrayBuffer)
         const out = sanitizeExtractedText(ocrText)
-        return out.length > text.length ? out : text
+        const base = looksLikePdfStructure(text) ? "" : text
+        return out.length > base.length ? out : base
       } catch (e) {
-        console.warn("⚠️ Gemini PDF OCR failed:", e)
+        const status = getGeminiErrorStatus(e as any)
+        const msg = String((e as any)?.message || e)
+        console.warn(`⚠️ Gemini PDF OCR failed (${status || "unknown"}): ${msg}`)
       }
     }
 
-    return text
+    return looksLikePdfStructure(text) ? "" : text
   } catch (error) {
-    console.error("PDF extraction error with pdf-parse:", error)
-    // Fallback to basic text extraction if pdf-parse fails
-    const uint8Array = new Uint8Array(arrayBuffer)
-    const text = new TextDecoder("latin1").decode(uint8Array)
-    const readableText = sanitizeExtractedText(text)
-    return readableText.length > 50 ? readableText : `PDF processing error: ${error}`
+    const msg = error instanceof Error ? error.message : String(error)
+    console.warn(`PDF extraction warning with pdf-parse: ${msg}`)
+    if (genAI) {
+      try {
+        const ocrText = await extractPDFTextWithGemini(arrayBuffer)
+        const out = sanitizeExtractedText(ocrText)
+        if (out && out.length >= 80 && !looksLikePdfStructure(out)) return out
+      } catch (e) {
+        const status = getGeminiErrorStatus(e as any)
+        const emsg = String((e as any)?.message || e)
+        console.warn(`⚠️ Gemini PDF OCR failed (${status || "unknown"}): ${emsg}`)
+      }
+    }
+    return ""
   }
 }
 
@@ -2203,15 +2274,19 @@ async function extractPDFTextWithGemini(arrayBuffer: ArrayBuffer): Promise<strin
   const prompt =
     "Extract all visible text from this resume PDF. Return plain text only with line breaks. Do not add, infer, or rename anything. If no text is readable, return an empty string."
 
-  const result = await model.generateContent([
-    prompt,
-    {
-      inlineData: {
-        data: pdfBase64,
-        mimeType: "application/pdf",
-      },
-    },
-  ])
+  const result = await runGeminiCall(
+    () =>
+      model.generateContent([
+        prompt,
+        {
+          inlineData: {
+            data: pdfBase64,
+            mimeType: "application/pdf",
+          },
+        },
+      ]),
+    { minSpacingMs: 1200, maxAttempts: 6 },
+  )
 
   return result.response.text()
 }

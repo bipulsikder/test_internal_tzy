@@ -59,6 +59,7 @@ export interface ComprehensiveCandidateData {
   fileName?: string;
   filePath?: string;
   fileUrl?: string;
+  fileHash?: string;
   status?: 'new' | 'reviewed' | 'shortlisted' | 'rejected' | 'hired' | 'interviewed' | 'selected' | 'on-hold';
   tags?: string[];
   rating?: number;

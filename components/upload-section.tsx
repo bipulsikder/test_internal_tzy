@@ -32,6 +32,17 @@ interface UploadedFile {
   progress: number
   result?: any
   error?: string
+  failureInfo?: {
+    httpStatus?: number
+    error?: string
+    details?: string
+    supabaseError?: {
+      code?: string
+      message?: string
+      details?: any
+      hint?: any
+    }
+  }
   duplicateInfo?: {
     existingName: string
     existingId: string
@@ -206,7 +217,26 @@ export function UploadSection() {
           return
         }
         
-        throw new Error(result.error || result.details || `HTTP ${response.status}`)
+        const message = result.error || "Upload failed"
+        setUploadedFiles((prev) =>
+          prev.map((f, i) =>
+            i === index
+              ? {
+                  ...f,
+                  status: "error",
+                  progress: 0,
+                  error: message,
+                  failureInfo: {
+                    httpStatus: response.status,
+                    error: result.error,
+                    details: result.details,
+                    supabaseError: result.supabaseError,
+                  },
+                }
+              : f,
+          ),
+        )
+        throw new Error(message)
       }
 
       // Map success to created/updated based on API flags
@@ -615,6 +645,23 @@ export function UploadSection() {
                     </div>
                   )}
 
+                  {/* Updated Existing Profile */}
+                  {uploadedFile.status === "updated" && uploadedFile.result?.duplicateInfo && (
+                    <div className="mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
+                      <div className="flex items-start space-x-2">
+                        <RefreshCw className="h-5 w-5 text-indigo-600 mt-0.5 flex-shrink-0" />
+                        <div className="flex-1">
+                          <h4 className="font-medium text-indigo-800">Existing Profile Updated</h4>
+                          <div className="mt-2 text-xs text-indigo-700 space-y-1">
+                            <p><strong>Candidate:</strong> {uploadedFile.result.duplicateInfo.existingName}</p>
+                            <p><strong>Reason:</strong> {uploadedFile.result.duplicateInfo.reason}</p>
+                            <p><strong>ID:</strong> {uploadedFile.result.duplicateInfo.existingId}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Parsing Failure */}
                   {uploadedFile.status === "parsing-failed" && uploadedFile.parsingError && (
                     <div className="mt-3 p-4 bg-red-50 border border-red-200 rounded-lg">
@@ -687,7 +734,26 @@ export function UploadSection() {
                     <Alert variant="destructive" className="mt-3">
                       <AlertCircle className="h-4 w-4" />
                       <AlertDescription>
-                        <strong>Processing failed:</strong> {uploadedFile.error}
+                        <div className="space-y-2">
+                          <div>
+                            <strong>Processing failed:</strong> {uploadedFile.error}
+                          </div>
+                          {uploadedFile.failureInfo?.supabaseError?.code && (
+                            <div className="text-sm">
+                              <div>
+                                <strong>Reason:</strong> {uploadedFile.failureInfo.supabaseError.message}
+                              </div>
+                              <div>
+                                <strong>Code:</strong> {uploadedFile.failureInfo.supabaseError.code}
+                              </div>
+                              {uploadedFile.failureInfo.supabaseError.hint && (
+                                <div>
+                                  <strong>Hint:</strong> {String(uploadedFile.failureInfo.supabaseError.hint)}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </AlertDescription>
                     </Alert>
                   )}

@@ -1,8 +1,6 @@
 import { supabase, supabaseAdmin, Database } from './supabase'
 import { ComprehensiveCandidateData } from './types'
-
-// Import the BUCKET_NAME constant from supabase-storage-utils
-const { BUCKET_NAME } = require('./supabase-storage-utils')
+import { BUCKET_NAME, deleteFileFromSupabase, uploadFileToSupabase } from './supabase-storage-utils'
 
 type CandidateRow = Database['public']['Tables']['candidates']['Row']
 type CandidateInsert = Database['public']['Tables']['candidates']['Insert']
@@ -10,7 +8,7 @@ type CandidateUpdate = Database['public']['Tables']['candidates']['Update']
 
 export class SupabaseCandidateService {
   // Convert Supabase row to ComprehensiveCandidateData
-  private static mapRowToCandidate(row: CandidateRow): ComprehensiveCandidateData {
+  static mapRowToCandidate(row: CandidateRow): ComprehensiveCandidateData {
     return {
       id: row.id,
       _id: row.id,
@@ -58,6 +56,7 @@ export class SupabaseCandidateService {
       fileName: row.file_name || '',
       filePath: '', // Path in Supabase storage
       fileUrl: row.file_url || '',
+      fileHash: (row as any).file_hash || '',
       status: row.status as any,
       tags: row.tags || [],
       rating: row.rating !== null ? row.rating : undefined,
@@ -76,7 +75,7 @@ export class SupabaseCandidateService {
   private static mapCandidateToInsert(candidate: Omit<ComprehensiveCandidateData, 'id'>): CandidateInsert {
     return {
       name: candidate.name,
-      email: candidate.email,
+      email: (candidate.email || '').trim().toLowerCase(),
       phone: candidate.phone || null,
       date_of_birth: candidate.dateOfBirth || null,
       gender: candidate.gender as any || null,
@@ -116,6 +115,7 @@ export class SupabaseCandidateService {
       resume_text: candidate.resumeText || null,
       file_name: candidate.fileName || null,
       file_url: candidate.fileUrl || null,
+      file_hash: (candidate.fileHash && candidate.fileHash.trim()) ? candidate.fileHash.trim() : null,
       file_size: null, // Will be set when file is uploaded
       file_type: null, // Will be set when file is uploaded
       status: (candidate.status as any) || 'new',
@@ -131,7 +131,7 @@ export class SupabaseCandidateService {
       parsing_confidence: 0.95, // Default confidence
       parsing_errors: [],
       uploaded_by: candidate.uploadedBy || null,
-      embedding: Array.isArray(candidate.embedding) ? (candidate.embedding as any) : null,
+      embedding: Array.isArray(candidate.embedding) && candidate.embedding.length > 0 ? (candidate.embedding as any) : null,
     }
   }
 
@@ -627,6 +627,166 @@ export class SupabaseCandidateService {
     }
   }
 
+  static async getCandidateByEmailAndPhone(email: string, phone: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const e = (email || '').trim()
+      const p = (phone || '').trim()
+      if (!e || !p) return null
+
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .ilike('email', e)
+        .eq('phone', p)
+        .limit(1)
+
+      if (error) {
+        return null
+      }
+
+      const row = (data || [])[0]
+      return row ? this.mapRowToCandidate(row) : null
+    } catch (e) {
+      return null
+    }
+  }
+
+  static async getCandidateByPhone(phone: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const normalized = phone.trim()
+      if (!normalized) return null
+
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('phone', normalized)
+        .limit(1)
+
+      if (error) {
+        return null
+      }
+
+      const row = (data || [])[0]
+      return row ? this.mapRowToCandidate(row) : null
+    } catch (e) {
+      return null
+    }
+  }
+
+  static async getCandidateByFileUrl(fileUrl: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const normalized = (fileUrl || '').trim()
+      if (!normalized) return null
+
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('file_url', normalized)
+        .limit(1)
+
+      if (error) {
+        return null
+      }
+
+      const row = (data || [])[0]
+      return row ? this.mapRowToCandidate(row) : null
+    } catch (e) {
+      return null
+    }
+  }
+
+  static async getCandidateByFileName(fileName: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const normalized = (fileName || '').trim()
+      if (!normalized) return null
+
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('file_name', normalized)
+        .limit(1)
+
+      if (error) {
+        return null
+      }
+
+      const row = (data || [])[0]
+      return row ? this.mapRowToCandidate(row) : null
+    } catch (e) {
+      return null
+    }
+  }
+
+  static async getCandidateByFileHash(fileHash: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const h = (fileHash || '').trim()
+      if (!h) return null
+
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('file_hash', h)
+        .limit(1)
+
+      if (error) {
+        return null
+      }
+
+      const row = (data || [])[0]
+      return row ? this.mapRowToCandidate(row) : null
+    } catch (e) {
+      return null
+    }
+  }
+
+  static async getCandidateByNameAndPhone(name: string, phone: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const n = (name || '').trim()
+      const p = (phone || '').trim()
+      if (!n || !p) return null
+
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('name', n)
+        .eq('phone', p)
+        .limit(1)
+
+      if (error) {
+        return null
+      }
+
+      const row = (data || [])[0]
+      return row ? this.mapRowToCandidate(row) : null
+    } catch (e) {
+      return null
+    }
+  }
+
+  static async getCandidateByNameAndLocation(name: string, location: string): Promise<ComprehensiveCandidateData | null> {
+    try {
+      const n = (name || '').trim()
+      const l = (location || '').trim()
+      if (!n || !l) return null
+
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('name', n)
+        .eq('location', l)
+        .limit(1)
+
+      if (error) {
+        return null
+      }
+
+      const row = (data || [])[0]
+      return row ? this.mapRowToCandidate(row) : null
+    } catch (e) {
+      return null
+    }
+  }
+
   // Update candidate
   static async updateCandidate(id: string, updates: Partial<ComprehensiveCandidateData>): Promise<void> {
     try {
@@ -634,13 +794,46 @@ export class SupabaseCandidateService {
       
       // Map only the fields that are being updated
       if (updates.name !== undefined) updateData.name = updates.name
-      if (updates.email !== undefined) updateData.email = updates.email
+      if (updates.email !== undefined) updateData.email = (updates.email || '').trim().toLowerCase()
       if (updates.phone !== undefined) updateData.phone = updates.phone
+      if (updates.dateOfBirth !== undefined) updateData.date_of_birth = updates.dateOfBirth || null
+      if (updates.gender !== undefined) updateData.gender = (updates.gender as any) || null
+      if (updates.maritalStatus !== undefined) updateData.marital_status = (updates.maritalStatus as any) || null
       if (updates.currentRole !== undefined) updateData.current_role = updates.currentRole
+      if (updates.desiredRole !== undefined) updateData.desired_role = updates.desiredRole || null
+      if (updates.currentCompany !== undefined) updateData.current_company = updates.currentCompany || null
       if (updates.location !== undefined) updateData.location = updates.location
+      if (updates.preferredLocation !== undefined) updateData.preferred_location = updates.preferredLocation || null
       if (updates.totalExperience !== undefined) updateData.total_experience = updates.totalExperience
+      if (updates.currentSalary !== undefined) updateData.current_salary = updates.currentSalary || null
+      if (updates.expectedSalary !== undefined) updateData.expected_salary = updates.expectedSalary || null
+      if (updates.noticePeriod !== undefined) updateData.notice_period = updates.noticePeriod || null
+      if (updates.highestQualification !== undefined) updateData.highest_qualification = updates.highestQualification || null
+      if (updates.degree !== undefined) updateData.degree = updates.degree || null
+      if (updates.specialization !== undefined) updateData.specialization = updates.specialization || null
+      if (updates.university !== undefined) updateData.university = updates.university || null
+      if (updates.educationYear !== undefined) updateData.education_year = updates.educationYear || null
+      if (updates.educationPercentage !== undefined) updateData.education_percentage = updates.educationPercentage || null
+      if (updates.additionalQualifications !== undefined) updateData.additional_qualifications = updates.additionalQualifications || null
       if (updates.technicalSkills !== undefined) updateData.technical_skills = updates.technicalSkills
       if (updates.softSkills !== undefined) updateData.soft_skills = updates.softSkills
+      if (updates.languagesKnown !== undefined) updateData.languages_known = updates.languagesKnown
+      if (updates.certifications !== undefined) updateData.certifications = updates.certifications
+      if (updates.previousCompanies !== undefined) updateData.previous_companies = updates.previousCompanies
+      if (updates.jobTitles !== undefined) updateData.job_titles = updates.jobTitles
+      if (updates.workDuration !== undefined) updateData.work_duration = updates.workDuration
+      if (updates.keyAchievements !== undefined) updateData.key_achievements = updates.keyAchievements
+      if (updates.projects !== undefined) updateData.projects = updates.projects
+      if (updates.awards !== undefined) updateData.awards = updates.awards
+      if (updates.publications !== undefined) updateData.publications = updates.publications
+      if (updates.references !== undefined) updateData.references = updates.references
+      if (updates.linkedinProfile !== undefined) updateData.linkedin_profile = updates.linkedinProfile || null
+      if (updates.portfolioUrl !== undefined) updateData.portfolio_url = updates.portfolioUrl || null
+      if (updates.githubProfile !== undefined) updateData.github_profile = updates.githubProfile || null
+      if (updates.summary !== undefined) updateData.summary = updates.summary || null
+      if (updates.resumeText !== undefined) updateData.resume_text = updates.resumeText || null
+      if (updates.fileName !== undefined) updateData.file_name = updates.fileName || null
+      if (updates.fileUrl !== undefined) updateData.file_url = updates.fileUrl || null
       if (updates.status !== undefined) updateData.status = updates.status
       if (updates.notes !== undefined) updateData.notes = updates.notes
       if (updates.rating !== undefined) updateData.rating = updates.rating
@@ -648,8 +841,15 @@ export class SupabaseCandidateService {
       if (updates.interviewStatus !== undefined) updateData.interview_status = updates.interviewStatus
       if (updates.feedback !== undefined) updateData.feedback = updates.feedback
       if (updates.uploadedBy !== undefined) updateData.uploaded_by = updates.uploadedBy
+      if ((updates as any).parsing_method !== undefined) (updateData as any).parsing_method = (updates as any).parsing_method || null
+      if ((updates as any).parsing_confidence !== undefined) (updateData as any).parsing_confidence = (updates as any).parsing_confidence ?? null
+      if ((updates as any).parsing_errors !== undefined) (updateData as any).parsing_errors = (updates as any).parsing_errors || []
+      if (updates.fileHash !== undefined) {
+        const fh = (updates.fileHash || '').trim()
+        ;(updateData as any).file_hash = fh ? fh : null
+      }
       if (updates.embedding !== undefined) {
-        updateData.embedding = Array.isArray(updates.embedding) ? (updates.embedding as any) : null
+        updateData.embedding = Array.isArray(updates.embedding) && updates.embedding.length > 0 ? (updates.embedding as any) : null
       }
       
       // Handle timestamp safely: avoid sending empty string to timestamptz column
@@ -1092,35 +1292,57 @@ export class SupabaseCandidateService {
   // Upload file to Supabase Storage
   static async uploadFile(file: File, candidateId: string): Promise<string> {
     try {
-      // Import the uploadFileToSupabase function from supabase-storage-utils
-      const { uploadFileToSupabase } = require('./supabase-storage-utils');
-      
-      const fileExt = file.name.split('.').pop()
-      
-      // Generate a hash of the file content to use as part of the filename
-      // This helps with deduplication and identification
+      const nameParts = String(file.name || "").split(".")
+      const extFromName = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : ""
+      const extFromType = String((file as any)?.type || "").includes("pdf")
+        ? "pdf"
+        : String((file as any)?.type || "").includes("word")
+          ? "docx"
+          : ""
+      const fileExt = extFromName || extFromType || "pdf"
+
       const fileBuffer = await file.arrayBuffer()
       const hashBuffer = await crypto.subtle.digest('SHA-256', fileBuffer)
       const hashArray = Array.from(new Uint8Array(hashBuffer))
       const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-      
-      // Use the first 10 chars of hash in filename for identification
-      const fileName = `${candidateId}-${hashHex.substring(0, 10)}.${fileExt}`
-      
-      console.log(`Uploading file to Supabase Storage: ${fileName}`)
-      
-      // Create a new Blob from the file to upload (since we already read it for hashing)
-      const fileBlob = new Blob([new Uint8Array(fileBuffer)], { type: file.type })
-      
-      // Use the improved uploadFileToSupabase function
-      const { url: publicUrl, path } = await uploadFileToSupabase(fileBlob, fileName);
 
-      console.log(`✅ File uploaded to Supabase Storage: ${publicUrl}`)
-      
-      // Update candidate with file information
+      const { data: existing } = await supabaseAdmin
+        .from('candidates')
+        .select('file_url,file_hash')
+        .eq('id', candidateId)
+        .single()
+
+      const existingHash = (existing as any)?.file_hash ? String((existing as any).file_hash) : ""
+      const existingUrl = (existing as any)?.file_url ? String((existing as any).file_url) : ""
+      if (existingHash && existingHash === hashHex && existingUrl) {
+        return existingUrl
+      }
+
+      const storageObjectName = `${candidateId}.${fileExt}`
+      const fileBlob = new Blob([new Uint8Array(fileBuffer)], { type: (file as any)?.type || undefined })
+      const { url: publicUrl } = await uploadFileToSupabase(fileBlob, storageObjectName)
+
+      const parseStoragePath = (url: string): string => {
+        const u = String(url || "")
+        const i = u.indexOf(`${BUCKET_NAME}/`)
+        if (i < 0) return ""
+        const rest = u.slice(i + BUCKET_NAME.length + 1)
+        const q = rest.indexOf("?")
+        return q >= 0 ? rest.slice(0, q) : rest
+      }
+
+      const oldPath = existingUrl ? parseStoragePath(existingUrl) : ""
+      if (oldPath && oldPath !== storageObjectName) {
+        try {
+          await deleteFileFromSupabase(oldPath)
+        } catch {
+        }
+      }
+
       await this.updateCandidate(candidateId, {
         fileName: file.name,
         fileUrl: publicUrl,
+        fileHash: hashHex,
       })
 
       return publicUrl
@@ -1133,18 +1355,11 @@ export class SupabaseCandidateService {
   // Delete file from Supabase Storage
   static async deleteFile(filePath: string): Promise<{ error: any }> {
     try {
-      // Import the deleteFileFromSupabase function from supabase-storage-utils
-      const { deleteFileFromSupabase } = require('./supabase-storage-utils');
-      
       console.log(`Deleting file from Supabase Storage: ${filePath}`)
       
       // Use the improved deleteFileFromSupabase function
-      const result = await deleteFileFromSupabase(filePath);
-      
-      if (result.error) {
-        console.error('Error deleting file from storage:', result.error)
-        return { error: result.error }
-      }
+      const ok = await deleteFileFromSupabase(filePath)
+      if (!ok) return { error: new Error('Failed to delete file from storage') }
 
       console.log(`✅ File deleted from Supabase Storage: ${filePath}`)
       return { error: null }

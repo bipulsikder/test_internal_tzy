@@ -97,6 +97,7 @@ export interface Database {
           resume_text: string | null
           file_name: string | null
           file_url: string | null
+          file_hash: string | null
           file_size: number | null
           file_type: string | null
           status: 'new' | 'reviewed' | 'shortlisted' | 'rejected' | 'hired' | 'interviewed' | 'selected' | 'on-hold'
@@ -113,7 +114,7 @@ export interface Database {
           parsing_errors: any[] | null
           uploaded_by: string | null
           search_vector: any
-          embedding: any // vector(1536)
+          embedding: any // vector
         }
         Insert: {
           id?: string
@@ -158,6 +159,7 @@ export interface Database {
           resume_text?: string | null
           file_name?: string | null
           file_url?: string | null
+          file_hash?: string | null
           file_size?: number | null
           file_type?: string | null
           status?: 'new' | 'reviewed' | 'shortlisted' | 'rejected' | 'hired' | 'interviewed' | 'selected' | 'on-hold' | 'offered' | 'accepted' | 'declined'
@@ -218,6 +220,7 @@ export interface Database {
           resume_text?: string | null
           file_name?: string | null
           file_url?: string | null
+          file_hash?: string | null
           file_size?: number | null
           file_type?: string | null
           status?: 'new' | 'reviewed' | 'shortlisted' | 'rejected' | 'hired' | 'interviewed' | 'selected' | 'on-hold'

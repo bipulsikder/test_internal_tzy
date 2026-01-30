@@ -3,7 +3,7 @@ export const runtime = "nodejs"
 import { parseResume } from "@/lib/resume-parser"
 import { generateEmbedding } from "@/lib/ai-utils"
 import { SupabaseCandidateService } from "@/lib/supabase-candidates"
-import { ensureResumeBucketExists } from "@/lib/supabase"
+import { ensureResumeBucketExists, supabaseAdmin } from "@/lib/supabase"
 import { checkFileExistsInSupabase } from "@/lib/supabase-storage-utils"
 
 export async function POST(request: NextRequest) {
@@ -32,14 +32,25 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  let uploadLogId: string | null = null
+
   try {
     const formData = await request.formData()
-    const file = formData.get("resume") as File
+    const rawFile = formData.get("resume") as File
 
-    if (!file) {
+    if (!rawFile) {
       console.error("No file provided in request")
       return NextResponse.json({ error: "No file provided" }, { status: 400 })
     }
+
+    const fileArrayBuffer = await rawFile.arrayBuffer()
+    const file = {
+      name: rawFile.name,
+      type: rawFile.type,
+      size: rawFile.size,
+      arrayBuffer: async () => fileArrayBuffer,
+      text: async () => new TextDecoder().decode(fileArrayBuffer),
+    } as any as File
 
     // Validate file type
     const allowedTypes = [
@@ -73,6 +84,59 @@ export async function POST(request: NextRequest) {
 
     // Ensure the Supabase bucket exists
     await ensureResumeBucketExists()
+
+    const hashBuffer = await crypto.subtle.digest('SHA-256', fileArrayBuffer)
+    const hashArray = Array.from(new Uint8Array(hashBuffer))
+    const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+
+    try {
+      const { data: logRow } = await supabaseAdmin
+        .from('upload_logs')
+        .insert({
+          hr_user_id: uploadedBy || null,
+          file_name: file.name,
+          file_type: file.type,
+          file_size: file.size,
+          file_hash: fileHash,
+          status: 'processing',
+          message: 'Upload received',
+        })
+        .select('id')
+        .single()
+      uploadLogId = logRow?.id || null
+    } catch (e) {
+      uploadLogId = null
+    }
+
+    const existingByHash = await SupabaseCandidateService.getCandidateByFileHash(fileHash)
+    if (existingByHash) {
+      if (uploadLogId) {
+        await supabaseAdmin
+          .from('upload_logs')
+          .update({
+            status: 'completed',
+            result_type: 'duplicate',
+            candidate_id: existingByHash.id,
+            message: 'Duplicate upload blocked (matched by file hash)',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', uploadLogId)
+      }
+      return NextResponse.json({
+        success: true,
+        isDuplicate: true,
+        message: "Resume already exists (matched by file hash)",
+        updatedExisting: false,
+        resultType: "duplicate",
+        duplicateInfo: {
+          existingName: existingByHash.name,
+          existingId: existingByHash.id,
+          uploadedAt: existingByHash.uploadedAt,
+          reason: `This file matches an existing upload for ${existingByHash.name}`,
+          fileUrl: existingByHash.fileUrl,
+        },
+      })
+    }
     
     // FIRST: Check if file already exists in Supabase storage
     console.log("Checking if file already exists in Supabase storage...")
@@ -88,13 +152,26 @@ export async function POST(request: NextRequest) {
       
       // Check if this file is already associated with a candidate in the database
       console.log("Checking if file is already associated with a candidate...")
-      const existingCandidates = await SupabaseCandidateService.getAllCandidates()
-      const existingCandidate = existingCandidates.find(c => 
-        c.fileUrl === fileUrl || c.fileName === file.name
-      )
+      const [byUrl, byName] = await Promise.all([
+        SupabaseCandidateService.getCandidateByFileUrl(fileUrl),
+        SupabaseCandidateService.getCandidateByFileName(file.name),
+      ])
+      const existingCandidate = byUrl || byName
       
       if (existingCandidate) {
         console.log("File is already associated with existing candidate:", existingCandidate.name)
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'completed',
+              result_type: 'duplicate',
+              candidate_id: existingCandidate.id,
+              message: 'Duplicate upload blocked (file already linked to candidate)',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
         return NextResponse.json({
           success: true,
           isDuplicate: true,
@@ -129,6 +206,19 @@ export async function POST(request: NextRequest) {
       } catch (parseError) {
         console.error("❌ Resume parsing failed:", parseError)
         parsingError = parseError instanceof Error ? parseError.message : "Unknown parsing error"
+
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'failed',
+              result_type: 'error',
+              message: 'Parsing failed',
+              error_message: parsingError,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
         
         // Return detailed parsing error information
         return NextResponse.json({
@@ -152,6 +242,20 @@ export async function POST(request: NextRequest) {
       const resumeText = (parsedData.resumeText || "").trim()
       const resumeTextLooksErroneous = /error|processing error|extraction failed/i.test(resumeText)
       if (!resumeText || resumeText.length < 50 || resumeTextLooksErroneous) {
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'completed',
+              result_type: 'blocked',
+              parsing_method: (parsedData as any).parsing_method || null,
+              parsing_errors: (parsedData as any).parsing_errors || null,
+              message: 'Blocked: resume content not extracted',
+              error_message: resumeTextLooksErroneous ? 'Text extraction returned an error marker' : 'Insufficient resume text available',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
         return NextResponse.json({
           error: "Resume content not extracted",
           parsingFailed: true,
@@ -176,14 +280,29 @@ export async function POST(request: NextRequest) {
       const hasContact = !!(parsedData.email && parsedData.email.trim()) || !!(parsedData.phone && parsedData.phone.trim())
       const hasContent = !!(parsedData.resumeText && parsedData.resumeText.trim().length > 100)
       const isDocx = file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      const shouldBlock = isNameInvalid || (!hasContact && !hasContent)
+      const shouldBlock = isNameInvalid || !hasContact || !hasContent
       if (shouldBlock) {
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'completed',
+              result_type: 'blocked',
+              parsing_method: (parsedData as any).parsing_method || null,
+              parsing_errors: (parsedData as any).parsing_errors || null,
+              message: 'Blocked: invalid or incomplete profile',
+              error_message: 'Invalid or incomplete profile',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
         return NextResponse.json({
           error: "Invalid or incomplete profile",
           validationFailed: true,
           reasons: {
             nameInvalid: isNameInvalid,
-            missingContactOrContent: !hasContact && !hasContent,
+            missingContact: !hasContact,
+            missingContent: !hasContent,
             fileType: file.type
           },
           fileName: file.name,
@@ -202,35 +321,35 @@ export async function POST(request: NextRequest) {
 
       // Check for duplicate resumes before processing
       console.log("Checking for duplicate resumes...")
-      const existingCandidates = await SupabaseCandidateService.getAllCandidates()
-      
-      // Check for duplicates based on multiple criteria
-      // Only check email if it exists and is not empty
       const emailToCheck = parsedData.email?.trim()
-      const duplicateChecks = [
-        // Check by exact email match (only if email exists)
-        emailToCheck ? existingCandidates.find(c => {
-          const existingEmail = c.email?.trim()
-          return existingEmail && existingEmail.toLowerCase() === emailToCheck.toLowerCase()
-        }) : null,
-        // Check by name + phone combination
-        parsedData.phone?.trim() ? existingCandidates.find(c => 
-          c.name?.toLowerCase() === parsedData.name?.toLowerCase() && 
-          c.phone?.trim() === parsedData.phone?.trim()
-        ) : null,
-        // Check by name + location combination
-        parsedData.location?.trim() ? existingCandidates.find(c => 
-          c.name?.toLowerCase() === parsedData.name?.toLowerCase() && 
-          c.location?.trim() && c.location.toLowerCase() === parsedData.location?.toLowerCase()
-        ) : null,
-        // Check by exact phone match (if phone exists)
-        parsedData.phone?.trim() ? existingCandidates.find(c => c.phone?.trim() === parsedData.phone?.trim()) : null
-      ].filter(Boolean) as any[]
+      const phoneToCheck = parsedData.phone?.trim()
+      const nameToCheck = parsedData.name?.trim()
+      const locationToCheck = parsedData.location?.trim()
 
-      if (duplicateChecks.length > 0) {
-        const duplicate = duplicateChecks[0]
+      let duplicate = null as any
+      if (emailToCheck && phoneToCheck) {
+        duplicate = await SupabaseCandidateService.getCandidateByEmailAndPhone(emailToCheck, phoneToCheck)
+      }
+
+      if (!duplicate && emailToCheck && !phoneToCheck) {
+        duplicate = await SupabaseCandidateService.getCandidateByEmail(emailToCheck)
+      }
+
+      if (!duplicate && phoneToCheck && !emailToCheck) {
+        duplicate = await SupabaseCandidateService.getCandidateByPhone(phoneToCheck)
+      }
+
+      if (!duplicate && nameToCheck && phoneToCheck && !emailToCheck) {
+        duplicate = await SupabaseCandidateService.getCandidateByNameAndPhone(nameToCheck, phoneToCheck)
+      }
+
+      if (!duplicate && nameToCheck && locationToCheck && !emailToCheck && !phoneToCheck) {
+        duplicate = await SupabaseCandidateService.getCandidateByNameAndLocation(nameToCheck, locationToCheck)
+      }
+
+      if (duplicate) {
         console.log("Duplicate resume detected:", duplicate)
-        
+
         const candidateId = duplicate.id
         console.log("Uploading to Supabase Storage and updating existing candidate...")
         fileUrl = await SupabaseCandidateService.uploadFile(file, candidateId)
@@ -283,6 +402,7 @@ export async function POST(request: NextRequest) {
           resumeText: parsedData.resumeText,
           fileName: file.name,
           fileUrl: fileUrl,
+          fileHash,
         })
 
         console.log("=== Existing candidate updated successfully ===")
@@ -298,19 +418,14 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      // Generate a unique ID for the candidate
-      const candidateId = crypto.randomUUID()
-
-      // Upload file to Supabase Storage
-      console.log("Uploading to Supabase Storage...")
-      fileUrl = await SupabaseCandidateService.uploadFile(file, candidateId)
-      filePath = fileUrl.split('/').pop() || ''
-
       // Generate embedding for vector search (optional)
       console.log("Generating embedding...")
-      let embedding: number[] = []
+      let embedding: number[] | undefined = undefined
       try {
-        embedding = await generateEmbedding(parsedData.resumeText || "")
+        const v = await generateEmbedding(parsedData.resumeText || "")
+        if (Array.isArray(v) && v.length > 0) {
+          embedding = v
+        }
         console.log("✅ Embedding generated successfully")
       } catch (embeddingError) {
         console.warn("⚠️ Failed to generate embedding:", embeddingError)
@@ -321,7 +436,7 @@ export async function POST(request: NextRequest) {
       const candidateData = {
         // Basic Information
         name: parsedData.name,
-        email: (parsedData.email && parsedData.email.trim()) ? parsedData.email.trim() : `${candidateId}@unknown.invalid`,
+        email: (parsedData.email && parsedData.email.trim()) ? parsedData.email.trim() : `${crypto.randomUUID()}@unknown.invalid`,
         phone: parsedData.phone || "",
         dateOfBirth: parsedData.dateOfBirth || "",
         gender: parsedData.gender || "",
@@ -366,11 +481,12 @@ export async function POST(request: NextRequest) {
         // File Information
         resumeText: parsedData.resumeText,
         fileName: file.name,
-        fileUrl: fileUrl, // URL to access file in Supabase storage
-        filePath: filePath,
+        fileUrl: "",
+        filePath: "",
+        fileHash,
 
         // Vector embedding (optional)
-        embedding,
+        ...(embedding ? { embedding } : {}),
 
         // System Fields
         status: "new" as const,
@@ -384,9 +500,9 @@ export async function POST(request: NextRequest) {
         feedback: "",
         
         // Parsing metadata
-        parsing_method: "gemini",
-        parsing_confidence: 0.95,
-        parsing_errors: [],
+        parsing_method: (parsedData as any).parsing_method || "gemini",
+        parsing_confidence: (parsedData as any).parsing_confidence ?? 0.95,
+        parsing_errors: (parsedData as any).parsing_errors || [],
         uploadedBy: uploadedBy,
       }
 
@@ -394,14 +510,45 @@ export async function POST(request: NextRequest) {
       console.log("Adding to Supabase...")
       // We already generated candidateId earlier for the file upload
       try {
-        await SupabaseCandidateService.addCandidate(candidateData)
+        const insertedId = await SupabaseCandidateService.addCandidate(candidateData)
+
+        console.log("Uploading to Supabase Storage...")
+        fileUrl = await SupabaseCandidateService.uploadFile(file, insertedId)
+        filePath = fileUrl.split('/').pop() || ''
+        await SupabaseCandidateService.updateCandidate(insertedId, { fileHash, updatedAt: new Date().toISOString() })
+
+        console.log("=== Resume Upload Completed Successfully ===")
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'completed',
+              result_type: 'created',
+              candidate_id: insertedId,
+              parsing_method: (parsedData as any).parsing_method || null,
+              parsing_errors: (parsedData as any).parsing_errors || null,
+              message: 'Created candidate',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
+        return NextResponse.json({
+          success: true,
+          candidateId: insertedId,
+          message: "Resume processed successfully",
+          fileUrl: fileUrl,
+          reusedExistingFile: false,
+          updatedExisting: false,
+          resultType: "created",
+          ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
+        })
       } catch (addError: any) {
         if (addError?.code === '23505' && addError?.message?.includes('email')) {
           console.log("Duplicate email detected during insert, updating existing candidate")
           
           let existingCandidate = null as any
           if (parsedData.email && parsedData.email.trim()) {
-            existingCandidate = await SupabaseCandidateService.getCandidateByEmail(parsedData.email.trim())
+            existingCandidate = await SupabaseCandidateService.getCandidateByEmail(parsedData.email.trim().toLowerCase())
           }
           
           if (!existingCandidate) {
@@ -409,16 +556,80 @@ export async function POST(request: NextRequest) {
             throw addError
           }
           
-          if (existingCandidate?.id) {
-            await SupabaseCandidateService.updateCandidate(existingCandidate.id, {
-              ...candidateData
+          const existingId = existingCandidate?.id || existingCandidate?._id
+          if (existingId) {
+            const existingPhone = (existingCandidate.phone || '').trim()
+            const newPhone = (parsedData.phone || '').trim()
+            if (!existingPhone || !newPhone || existingPhone !== newPhone) {
+              if (uploadLogId) {
+                await supabaseAdmin
+                  .from('upload_logs')
+                  .update({
+                    status: 'completed',
+                    result_type: 'duplicate',
+                    candidate_id: existingId,
+                    parsing_method: (parsedData as any).parsing_method || null,
+                    parsing_errors: (parsedData as any).parsing_errors || null,
+                    message: 'Duplicate email; phone mismatch; not updated',
+                    error_message: 'Email already exists with different phone',
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', uploadLogId)
+              }
+              return NextResponse.json({
+                error: "Email already exists with different phone",
+                isDuplicate: true,
+                duplicateInfo: {
+                  existingName: existingCandidate.name,
+                  existingId: existingId,
+                  uploadedAt: existingCandidate.uploadedAt,
+                  reason: `Email ${parsedData.email} already exists, but phone doesn't match. Not updating.`
+                },
+              }, { status: 409 })
+            }
+
+            console.log("Uploading to Supabase Storage...")
+            fileUrl = await SupabaseCandidateService.uploadFile(file, existingId)
+            filePath = fileUrl.split('/').pop() || ''
+
+            await SupabaseCandidateService.updateCandidate(existingId, {
+              ...candidateData,
+              fileUrl,
+              fileName: file.name,
+              fileHash,
+              uploadedAt: undefined,
+              updatedAt: new Date().toISOString(),
             })
+
+            if (uploadLogId) {
+              await supabaseAdmin
+                .from('upload_logs')
+                .update({
+                  status: 'completed',
+                  result_type: 'updated',
+                  candidate_id: existingId,
+                  parsing_method: (parsedData as any).parsing_method || null,
+                  parsing_errors: (parsedData as any).parsing_errors || null,
+                  message: 'Updated existing candidate',
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', uploadLogId)
+            }
+
             return NextResponse.json({
               success: true,
-              candidateId: existingCandidate.id,
-              message: "Existing candidate updated with parsed data",
+              candidateId: existingId,
+              message: "Existing candidate updated with new resume",
               fileUrl: fileUrl,
               reusedExistingFile: false,
+              updatedExisting: true,
+              resultType: "updated",
+              duplicateInfo: {
+                existingName: existingCandidate.name,
+                existingId: existingId,
+                uploadedAt: existingCandidate.uploadedAt,
+                reason: `Duplicate email detected; updated existing profile (email + phone matched)`
+              },
               ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
             })
           }
@@ -426,18 +637,7 @@ export async function POST(request: NextRequest) {
         throw addError
       }
 
-      console.log("=== Resume Upload Completed Successfully ===")
-
-      return NextResponse.json({
-        success: true,
-        candidateId,
-        message: "Resume processed successfully",
-        fileUrl: fileUrl,
-        reusedExistingFile: false,
-        updatedExisting: false,
-        resultType: "created",
-        ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
-      })
+      throw new Error("Unexpected state")
     }
 
     // If we reach here, we're reusing an existing file that's not associated with any candidate
@@ -549,6 +749,20 @@ export async function POST(request: NextRequest) {
         })
 
         console.log("=== Existing candidate updated successfully (Reused File) ===")
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'completed',
+              result_type: 'updated',
+              candidate_id: duplicate.id,
+              parsing_method: (parsedData as any).parsing_method || null,
+              parsing_errors: (parsedData as any).parsing_errors || null,
+              message: 'Updated existing candidate (reused file)',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
         return NextResponse.json({
           success: true,
           candidateId: duplicate.id,
@@ -647,30 +861,106 @@ export async function POST(request: NextRequest) {
 
       // Add to Supabase
       console.log("Adding to Supabase...")
+      let insertedCandidateId: string | null = null
       try {
-        await SupabaseCandidateService.addCandidate(candidateData)
+        const insertedId = await SupabaseCandidateService.addCandidate(candidateData)
+        insertedCandidateId = insertedId
+
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'completed',
+              result_type: 'created',
+              candidate_id: insertedId,
+              parsing_method: (parsedData as any).parsing_method || null,
+              parsing_errors: (parsedData as any).parsing_errors || null,
+              message: 'Created candidate (reused existing file)',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
       } catch (addError: any) {
         // Handle duplicate email constraint violation
         if (addError?.code === '23505' && addError?.message?.includes('email')) {
           console.log("Duplicate email detected during insert")
-          
-          // Try to find the existing candidate
-          const existingCandidates = await SupabaseCandidateService.getAllCandidates()
-          const existingCandidate = existingCandidates.find(c => 
-            c.email?.trim().toLowerCase() === parsedData.email?.trim().toLowerCase()
-          )
-          
+
+          const email = (parsedData.email || '').trim().toLowerCase()
+          const phone = (parsedData.phone || '').trim()
+          const existingCandidate = email ? await SupabaseCandidateService.getCandidateByEmail(email) : null
+
           if (existingCandidate) {
+            const existingId = existingCandidate.id || (existingCandidate as any)._id
+            if (!existingId) {
+              throw addError
+            }
+            const existingPhone = (existingCandidate.phone || '').trim()
+            if (!existingPhone || !phone || existingPhone !== phone) {
+              if (uploadLogId) {
+                await supabaseAdmin
+                  .from('upload_logs')
+                  .update({
+                    status: 'completed',
+                    result_type: 'duplicate',
+                    candidate_id: existingId,
+                    parsing_method: (parsedData as any).parsing_method || null,
+                    parsing_errors: (parsedData as any).parsing_errors || null,
+                    message: 'Duplicate email; phone mismatch; not updated (reused file)',
+                    error_message: 'Resume already exists, but phone does not match',
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', uploadLogId)
+              }
+              return NextResponse.json({
+                error: "Resume already exists",
+                isDuplicate: true,
+                duplicateInfo: {
+                  existingName: existingCandidate.name,
+                  existingId: existingId,
+                  uploadedAt: existingCandidate.uploadedAt,
+                  reason: `Candidate with email ${parsedData.email} already exists, but phone doesn't match. Not updating.`
+                }
+              }, { status: 409 })
+            }
+
+            await SupabaseCandidateService.updateCandidate(existingId, {
+              ...candidateData,
+              fileUrl,
+              fileName: file.name,
+              updatedAt: new Date().toISOString(),
+            })
+
+            if (uploadLogId) {
+              await supabaseAdmin
+                .from('upload_logs')
+                .update({
+                  status: 'completed',
+                  result_type: 'updated',
+                  candidate_id: existingId,
+                  parsing_method: (parsedData as any).parsing_method || null,
+                  parsing_errors: (parsedData as any).parsing_errors || null,
+                  message: 'Updated existing candidate (reused file; email + phone matched)',
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', uploadLogId)
+            }
+
             return NextResponse.json({
-              error: "Resume already exists",
-              isDuplicate: true,
+              success: true,
+              candidateId: existingId,
+              message: "Existing candidate updated with reused file",
+              fileUrl,
+              reusedExistingFile: true,
+              updatedExisting: true,
+              resultType: "updated",
               duplicateInfo: {
                 existingName: existingCandidate.name,
-                existingId: existingCandidate.id,
+                existingId: existingId,
                 uploadedAt: existingCandidate.uploadedAt,
-                reason: `Candidate with email ${parsedData.email} already exists in database`
-              }
-            }, { status: 409 })
+                reason: `Duplicate email detected; updated existing profile (email + phone matched)`
+              },
+              ...Object.fromEntries(Object.entries(parsedData).filter(([key]) => key !== 'fileUrl')),
+            })
           }
         }
         
@@ -680,9 +970,13 @@ export async function POST(request: NextRequest) {
 
       console.log("=== Resume Upload Completed Successfully (Reused Existing File) ===")
 
+      if (!insertedCandidateId) {
+        throw new Error("Failed to create candidate")
+      }
+
       return NextResponse.json({
         success: true,
-        candidateId,
+        candidateId: insertedCandidateId,
         message: "Resume processed successfully (reused existing file)",
         fileUrl: fileUrl,
         reusedExistingFile: true,
@@ -693,6 +987,21 @@ export async function POST(request: NextRequest) {
       
     } catch (parseError) {
       console.error("❌ Failed to parse existing file from Supabase storage:", parseError)
+      try {
+        if (uploadLogId) {
+          await supabaseAdmin
+            .from('upload_logs')
+            .update({
+              status: 'failed',
+              result_type: 'error',
+              message: 'Failed to parse existing file from storage',
+              error_message: parseError instanceof Error ? parseError.message : 'Unknown error',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', uploadLogId)
+        }
+      } catch (e) {
+      }
       return NextResponse.json({
         error: "Failed to parse existing file from Supabase storage",
         details: parseError instanceof Error ? parseError.message : "Unknown error",
@@ -711,10 +1020,36 @@ export async function POST(request: NextRequest) {
     console.error("=== Resume Upload Error ===")
     console.error("Error details:", error)
 
+    try {
+      if (uploadLogId) {
+        await supabaseAdmin
+          .from('upload_logs')
+          .update({
+            status: 'failed',
+            result_type: 'error',
+            error_message: error instanceof Error ? error.message : 'Unknown error',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', uploadLogId)
+      }
+    } catch (e) {
+    }
+
+    const anyErr = error as any
+    const supabaseError = anyErr && typeof anyErr === "object" && "code" in anyErr && "message" in anyErr
+      ? {
+          code: String(anyErr.code),
+          message: String(anyErr.message),
+          details: anyErr.details ?? null,
+          hint: anyErr.hint ?? null,
+        }
+      : undefined
+
     return NextResponse.json(
       {
         error: "Failed to process resume",
         details: error instanceof Error ? error.message : "Unknown error",
+        supabaseError,
         timestamp: new Date().toISOString(),
       },
       { status: 500 },

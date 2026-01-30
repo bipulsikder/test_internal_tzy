@@ -303,7 +303,9 @@ export async function GET(request: NextRequest) {
       currentRole: candidate.currentRole || candidate.current_role || "",
       totalExperience: candidate.totalExperience || candidate.total_experience || "",
       location: candidate.location || "",
-      resumeText: candidate.resumeText || candidate.resume_text || ""
+      resumeText: candidate.resumeText || candidate.resume_text || "",
+      fileUrl: candidate.fileUrl || candidate.file_url || "",
+      fileName: candidate.fileName || candidate.file_name || "",
     }))
 
     let results: any[] = []
