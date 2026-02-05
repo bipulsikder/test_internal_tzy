@@ -6,11 +6,15 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { Input } from "@/components/ui/input"
-import { Loader2, ArrowLeft, Calendar, ExternalLink, Eye, Link2, Mail, MessageSquare, Save, User } from "lucide-react"
-import { format } from "date-fns"
+import { Loader2, ArrowLeft, Calendar, ExternalLink, Eye, Link2, Mail, MessageSquare, RotateCw, Save, User, Pencil, Plus, Sparkles } from "lucide-react"
+import { format, formatDistanceToNow } from "date-fns"
 import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Label } from "@/components/ui/label"
+import { getBoardJobApplyUrl, normalizeExternalUrl } from "@/lib/utils"
 
 const CandidatePreviewDialogDynamic = dynamic(() => import("./candidate-preview-dialog").then(m => m.CandidatePreviewDialog), {
   ssr: false,
@@ -19,15 +23,14 @@ const CandidatePreviewDialogDynamic = dynamic(() => import("./candidate-preview-
 interface Job {
   id: string
   title: string
-  department: string
   location: string
-  type: string
   status: string
   description: string
-  requirements: string[]
   created_at: string
   client_id?: string | null
   client_name?: string | null
+  industry?: string | null
+  employment_type?: string | null
 }
 
 type Client = {
@@ -64,6 +67,7 @@ interface Application {
 
 interface JobInvite {
   id: string
+  candidate_id?: string | null
   email: string
   token: string
   status: string
@@ -73,6 +77,23 @@ interface JobInvite {
   applied_at: string | null
   rejected_at: string | null
   created_at: string | null
+}
+
+type InterviewRound = {
+  id: string
+  job_id: string
+  name: string
+  sort_order: number
+}
+
+type InterviewEntry = {
+  id: string
+  round_id: string
+  application_id: string
+  status: string
+  scheduled_at: string | null
+  notes: string | null
+  updated_at: string | null
 }
 
 interface JobDetailsProps {
@@ -99,9 +120,41 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
   const [activeStage, setActiveStage] = useState<string>(initialTab || "all")
   const [selectedCandidate, setSelectedCandidate] = useState<any | null>(null)
   const [client, setClient] = useState<Client | null>(null)
+  const [pendingStageChange, setPendingStageChange] = useState<null | {
+    applicationId: string
+    from: string
+    to: string
+    candidateName: string
+  }>(null)
   const [clientOpen, setClientOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState("")
   const [inviteCreating, setInviteCreating] = useState(false)
+  const [inviteResendingId, setInviteResendingId] = useState<string | null>(null)
+
+  const [inviteStatusFilter, setInviteStatusFilter] = useState<string>("all")
+  const [inviteActivityFilter, setInviteActivityFilter] = useState<string>("all")
+  const [inviteProfileFilter, setInviteProfileFilter] = useState<string>("all")
+
+  const [interviewRounds, setInterviewRounds] = useState<InterviewRound[]>([])
+  const [interviewRoundId, setInterviewRoundId] = useState<string>("")
+  const [interviewsByKey, setInterviewsByKey] = useState<Record<string, InterviewEntry>>({})
+  const [interviewLoading, setInterviewLoading] = useState(false)
+
+  const [interviewDraftByKey, setInterviewDraftByKey] = useState<Record<string, { notes: string; scheduledAtLocal: string }>>({})
+  const [interviewDraftSavingByKey, setInterviewDraftSavingByKey] = useState<Record<string, true>>({})
+
+  const [roundEditorOpen, setRoundEditorOpen] = useState(false)
+  const [roundEditorMode, setRoundEditorMode] = useState<"create" | "rename">("create")
+  const [roundEditorRoundId, setRoundEditorRoundId] = useState<string | null>(null)
+  const [roundEditorName, setRoundEditorName] = useState<string>("")
+  const [roundEditorSaving, setRoundEditorSaving] = useState(false)
+  const [roundDeleteOpen, setRoundDeleteOpen] = useState(false)
+  const [roundDeleteSaving, setRoundDeleteSaving] = useState(false)
+
+  const [interviewStatusFilter, setInterviewStatusFilter] = useState<string>("all")
+
+  const [candidateAiById, setCandidateAiById] = useState<Record<string, { summary: string; expanded: boolean; visible: boolean }>>({})
+  const [candidateAiLoadingById, setCandidateAiLoadingById] = useState<Record<string, true>>({})
   
   // State for notes editing
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
@@ -115,11 +168,200 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
     fetch(`/api/job-invites?jobId=${job.id}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Failed to load invites"))))
       .then((d) => setInvites(Array.isArray(d?.invites) ? d.invites : []))
-      .catch(() => setInvites([]))
+      .catch((e: any) => {
+        setInvites([])
+        toast({ title: "Invites failed", description: e?.message || "Failed to load invites", variant: "destructive" })
+      })
   }, [job.id])
+
+  const fetchInterviewData = async () => {
+    setInterviewLoading(true)
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/interviews`, { cache: "no-store" })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to load interviews")
+
+      const rounds = Array.isArray(data?.rounds) ? (data.rounds as InterviewRound[]) : []
+      const interviews = Array.isArray(data?.interviews) ? (data.interviews as InterviewEntry[]) : []
+
+      setInterviewRounds(rounds)
+      if (!interviewRoundId || !rounds.some((r) => r.id === interviewRoundId)) {
+        setInterviewRoundId(rounds[0]?.id || "")
+      }
+
+      const map: Record<string, InterviewEntry> = {}
+      const drafts: Record<string, { notes: string; scheduledAtLocal: string }> = {}
+      for (const it of interviews) {
+        if (!it?.round_id || !it?.application_id) continue
+        map[`${it.round_id}:${it.application_id}`] = it
+        drafts[`${it.round_id}:${it.application_id}`] = {
+          notes: String(it?.notes || ""),
+          scheduledAtLocal: toDateTimeLocal((it as any)?.scheduled_at || null),
+        }
+      }
+      setInterviewsByKey(map)
+      setInterviewDraftByKey(drafts)
+    } catch (e: any) {
+      setInterviewRounds([])
+      setInterviewsByKey({})
+      setInterviewDraftByKey({})
+      toast({ title: "Interview failed", description: e?.message || "Failed to load", variant: "destructive" })
+    } finally {
+      setInterviewLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeStage !== "interview") return
+    fetchInterviewData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStage, job.id])
+
+  const openCreateRound = () => {
+    setRoundEditorMode("create")
+    setRoundEditorRoundId(null)
+
+    const used = new Set<number>()
+    for (const r of interviewRounds) {
+      const m = String(r.name || "").match(/\bround\s*(\d+)\b/i)
+      if (m?.[1]) {
+        const n = Number(m[1])
+        if (Number.isFinite(n)) used.add(n)
+      }
+    }
+
+    const nextNum = used.size ? Math.max(...Array.from(used)) + 1 : interviewRounds.length + 1
+    setRoundEditorName(`Round ${nextNum}`)
+    setRoundEditorOpen(true)
+  }
+
+  const openRenameRound = (round: InterviewRound) => {
+    setRoundEditorMode("rename")
+    setRoundEditorRoundId(round.id)
+    setRoundEditorName(round.name)
+    setRoundEditorOpen(true)
+  }
+
+  const saveRoundEditor = async () => {
+    const name = roundEditorName.trim()
+    if (!name) return
+    setRoundEditorSaving(true)
+    try {
+      if (roundEditorMode === "create") {
+        const res = await fetch(`/api/jobs/${job.id}/interview-rounds`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name })
+        })
+        const data = await res.json().catch(() => null)
+        if (!res.ok) throw new Error(data?.error || "Failed to create round")
+        await fetchInterviewData()
+        if (data?.round?.id) setInterviewRoundId(data.round.id)
+      } else {
+        const id = roundEditorRoundId
+        if (!id) return
+        const res = await fetch(`/api/jobs/${job.id}/interview-rounds`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, name })
+        })
+        const data = await res.json().catch(() => null)
+        if (!res.ok) throw new Error(data?.error || "Failed to rename")
+        await fetchInterviewData()
+      }
+
+      setRoundEditorOpen(false)
+    } catch (e: any) {
+      toast({ title: "Round update failed", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setRoundEditorSaving(false)
+    }
+  }
+
+  const deleteRound = async () => {
+    const id = roundEditorRoundId
+    if (!id) return
+    setRoundDeleteSaving(true)
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/interview-rounds`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id })
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to delete")
+      setRoundDeleteOpen(false)
+      setRoundEditorOpen(false)
+      await fetchInterviewData()
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setRoundDeleteSaving(false)
+    }
+  }
+
+  const upsertInterview = async (
+    applicationId: string,
+    roundId: string,
+    patch: Partial<Pick<InterviewEntry, "status" | "notes" | "scheduled_at">>
+  ) => {
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/interviews`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applicationId, roundId, ...patch })
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to update")
+      const it = data?.interview as InterviewEntry | undefined
+      if (it?.round_id && it?.application_id) {
+        setInterviewsByKey((prev) => ({ ...prev, [`${it.round_id}:${it.application_id}`]: it }))
+        setInterviewDraftByKey((prev) => ({
+          ...prev,
+          [`${it.round_id}:${it.application_id}`]: {
+            notes: String(it?.notes || ""),
+            scheduledAtLocal: toDateTimeLocal((it as any)?.scheduled_at || null),
+          }
+        }))
+      }
+      if (patch.status === "move_next") {
+        await fetchInterviewData()
+      }
+    } catch (e: any) {
+      toast({ title: "Interview update failed", description: e?.message || "Failed", variant: "destructive" })
+    }
+  }
 
   const inviteBase = (process.env.NEXT_PUBLIC_BOARD_APP_BASE_URL || "").replace(/\/$/, "")
   const inviteLink = (token: string) => (inviteBase ? `${inviteBase}/invite/${token}` : `/invite/${token}`)
+
+  const publicApplyUrl = getBoardJobApplyUrl(job.id)
+
+  const filteredInvites = invites.filter((inv) => {
+    if (inviteStatusFilter !== "all" && String(inv.status || "").toLowerCase() !== inviteStatusFilter) return false
+    if (inviteActivityFilter === "opened" && !inv.opened_at) return false
+    if (inviteActivityFilter === "not_opened" && inv.opened_at) return false
+    if (inviteActivityFilter === "applied" && !inv.applied_at) return false
+    if (inviteActivityFilter === "not_applied" && inv.applied_at) return false
+    if (inviteProfileFilter === "linked" && !inv.candidate_id) return false
+    if (inviteProfileFilter === "not_linked" && inv.candidate_id) return false
+    return true
+  })
+
+  const interviewApps = applications.filter((a) => a.status === "interview")
+
+  const toDateTimeLocal = (iso: string | null) => {
+    if (!iso) return ""
+    const d = new Date(iso)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  const fromDateTimeLocal = (v: string) => {
+    if (!v) return null
+    const d = new Date(v)
+    return Number.isNaN(d.getTime()) ? null : d.toISOString()
+  }
 
   const inviteBadgeClass = (status: string) => {
     switch (status) {
@@ -167,6 +409,26 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
     }
   }
 
+  const resendInvite = async (email: string, inviteId: string) => {
+    setInviteResendingId(inviteId)
+    try {
+      const res = await fetch("/api/job-invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id, email, resend: true })
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to resend")
+      toast({ title: "Resent", description: data?.emailSent ? "Invite email resent." : "Invite link ready." })
+      const refreshed = await fetch(`/api/job-invites?jobId=${job.id}`).then((r) => (r.ok ? r.json() : null))
+      setInvites(Array.isArray(refreshed?.invites) ? refreshed.invites : invites)
+    } catch (e: any) {
+      toast({ title: "Resend failed", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setInviteResendingId(null)
+    }
+  }
+
   useEffect(() => {
     if (!job.client_id) {
       setClient(null)
@@ -188,12 +450,12 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
   const fetchApplications = async () => {
     try {
       const res = await fetch(`/api/applications?jobId=${job.id}`)
-      if (res.ok) {
-        const data = await res.json()
-        setApplications(data)
-      }
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to fetch applications")
+      setApplications(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error("Failed to fetch applications", error)
+      toast({ title: "Applications failed", description: (error as any)?.message || "Failed", variant: "destructive" })
     } finally {
       setLoading(false)
     }
@@ -226,6 +488,31 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
       })
       fetchApplications() // Revert on error
     }
+  }
+
+  const shouldConfirmStageChange = (from: string, to: string) => {
+    const needs = new Set(["screening", "interview", "offer"])
+    return needs.has(from) || needs.has(to)
+  }
+
+  const stageLabel = (id: string) => {
+    const found = STATUS_COLUMNS.find((s) => s.id === id)
+    return found?.label || id
+  }
+
+  const requestStageChange = (app: Application, to: string) => {
+    const from = String(app.status || "")
+    if (!to || to === from) return
+    if (shouldConfirmStageChange(from, to)) {
+      setPendingStageChange({
+        applicationId: app.id,
+        from,
+        to,
+        candidateName: String(app.candidates?.name || "Candidate")
+      })
+      return
+    }
+    updateStatus(app.id, to)
   }
 
   const handleNoteEdit = (app: Application) => {
@@ -270,6 +557,41 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
       setSelectedCandidate(app.candidates)
   }
 
+  const toggleCandidateAi = async (candidateId: string, force?: boolean) => {
+    if (!candidateId) return
+    const existing = candidateAiById[candidateId]
+    if (!force && existing?.summary) {
+      setCandidateAiById((prev) => ({
+        ...prev,
+        [candidateId]: { ...prev[candidateId], visible: !prev[candidateId].visible }
+      }))
+      return
+    }
+
+    setCandidateAiLoadingById((prev) => ({ ...prev, [candidateId]: true }))
+    try {
+      const res = await fetch("/api/matches/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id, candidateId, force: !!force })
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to generate analysis")
+      setCandidateAiById((prev) => ({
+        ...prev,
+        [candidateId]: { summary: String(data?.summary || ""), expanded: false, visible: true }
+      }))
+    } catch (e: any) {
+      toast({ title: "AI analysis failed", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setCandidateAiLoadingById((prev) => {
+        const next = { ...prev }
+        delete next[candidateId]
+        return next
+      })
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
   }
@@ -284,21 +606,25 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
           <h2 className="text-2xl font-bold">{job.title}</h2>
           <div className="flex gap-2 text-sm text-gray-500">
             {clientLabel ? (
-              <button className="text-blue-600 hover:underline" onClick={() => setClientOpen(true)}>
+              <button className="inline-flex items-center gap-2 text-blue-600 hover:underline" onClick={() => setClientOpen(true)}>
+                {client?.logo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={client.logo_url} alt="Logo" className="h-5 w-5 rounded border bg-white object-cover" />
+                ) : null}
                 {clientLabel}
               </button>
             ) : null}
             {clientLabel ? <span>•</span> : null}
-            <span>{job.department}</span>
+            <span>{job.industry || ""}</span>
             <span>•</span>
             <span>{job.location}</span>
             <span>•</span>
-            <Badge variant="outline">{job.type}</Badge>
+            <Badge variant="outline">{String(job.employment_type || "").replace(/_/g, " ")}</Badge>
             <Badge className={job.status === 'open' ? 'bg-green-500' : 'bg-gray-500'}>
               {job.status}
             </Badge>
             <a 
-                href={`/board/${job.id}`} 
+                href={publicApplyUrl}
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="ml-2 flex items-center gap-1 text-blue-600 hover:underline"
@@ -315,8 +641,20 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
             <DialogTitle>{client?.name || clientLabel || "Client"}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4">
+            {client?.logo_url ? (
+              <div className="flex items-center gap-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={client.logo_url} alt="Logo" className="h-14 w-14 rounded-xl border bg-white object-cover" />
+                <div className="text-sm text-muted-foreground">Company logo</div>
+              </div>
+            ) : null}
             {client?.website ? (
-              <a href={client.website} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+              <a
+                href={normalizeExternalUrl(client.website)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
                 {client.website}
               </a>
             ) : null}
@@ -345,6 +683,34 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!pendingStageChange} onOpenChange={(open) => {
+        if (!open) setPendingStageChange(null)
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm stage change</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingStageChange
+                ? `Move ${pendingStageChange.candidateName} from ${stageLabel(pendingStageChange.from)} to ${stageLabel(pendingStageChange.to)}?`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingStageChange(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!pendingStageChange) return
+                const payload = pendingStageChange
+                setPendingStageChange(null)
+                updateStatus(payload.applicationId, payload.to)
+              }}
+            >
+              Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <div className="space-y-4">
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-2">
@@ -445,12 +811,58 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
               </CardContent>
             </Card>
 
-            {!invites.length ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="w-full sm:w-[200px]">
+                  <Select value={inviteStatusFilter} onValueChange={setInviteStatusFilter}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All statuses</SelectItem>
+                      <SelectItem value="sent">Sent</SelectItem>
+                      <SelectItem value="opened">Opened</SelectItem>
+                      <SelectItem value="applied">Applied</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-full sm:w-[220px]">
+                  <Select value={inviteActivityFilter} onValueChange={setInviteActivityFilter}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="Activity" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="opened">Opened link</SelectItem>
+                      <SelectItem value="not_opened">Not opened</SelectItem>
+                      <SelectItem value="applied">Applied</SelectItem>
+                      <SelectItem value="not_applied">Not applied</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-full sm:w-[200px]">
+                  <Select value={inviteProfileFilter} onValueChange={setInviteProfileFilter}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="Profile" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All profiles</SelectItem>
+                      <SelectItem value="linked">Profile linked</SelectItem>
+                      <SelectItem value="not_linked">Not linked</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">Showing {filteredInvites.length} invite{filteredInvites.length === 1 ? "" : "s"}</div>
+            </div>
+
+            {!filteredInvites.length ? (
               <div className="text-center py-12 text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg bg-gray-50/50">
                 No invites yet. Create one above to generate a tracked invite link.
               </div>
             ) : (
-              invites.map((inv) => (
+              filteredInvites.map((inv) => (
                 <Card key={inv.id} className="shadow-sm">
                   <CardContent className="p-4 space-y-2">
                     <div className="flex items-start justify-between gap-3">
@@ -464,16 +876,19 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
 
                         <div className="mt-2 grid gap-1 text-xs text-gray-500">
                           <div>
-                            <span className="font-medium text-gray-700">Sent:</span> {inv.sent_at ? format(new Date(inv.sent_at), "MMM d, yyyy") : "—"}
+                            <span className="font-medium text-gray-700">Sent:</span> {inv.sent_at ? formatDistanceToNow(new Date(inv.sent_at), { addSuffix: true }) : "—"}
                           </div>
                           <div>
-                            <span className="font-medium text-gray-700">Opened:</span> {inv.opened_at ? format(new Date(inv.opened_at), "MMM d, yyyy") : "—"}
+                            <span className="font-medium text-gray-700">Opened:</span> {inv.opened_at ? formatDistanceToNow(new Date(inv.opened_at), { addSuffix: true }) : "—"}
                           </div>
                           <div>
-                            <span className="font-medium text-gray-700">Applied:</span> {inv.applied_at ? format(new Date(inv.applied_at), "MMM d, yyyy") : "—"}
+                            <span className="font-medium text-gray-700">Applied:</span> {inv.applied_at ? formatDistanceToNow(new Date(inv.applied_at), { addSuffix: true }) : "—"}
                           </div>
                           <div>
-                            <span className="font-medium text-gray-700">Rejected:</span> {inv.rejected_at ? format(new Date(inv.rejected_at), "MMM d, yyyy") : "—"}
+                            <span className="font-medium text-gray-700">Profile:</span> {inv.candidate_id ? "Linked" : "Not linked"}
+                          </div>
+                          <div>
+                            <span className="font-medium text-gray-700">Rejected:</span> {inv.rejected_at ? formatDistanceToNow(new Date(inv.rejected_at), { addSuffix: true }) : "—"}
                           </div>
                         </div>
                       </div>
@@ -497,6 +912,17 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
                         </Button>
 
                         <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8"
+                          disabled={inviteResendingId === inv.id}
+                          onClick={() => resendInvite(inv.email, inv.id)}
+                        >
+                          {inviteResendingId === inv.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCw className="mr-2 h-4 w-4" />}
+                          Resend
+                        </Button>
+
+                        <Button
                           variant="secondary"
                           size="sm"
                           className="h-8"
@@ -513,12 +939,342 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
           </div>
         ) : (
           <>
-          {(activeStage === "all" 
-              ? applications 
-              : applications.filter((a) => a.status === activeStage)
-              ).map((app) => (
-              <Card key={app.id} className="shadow-sm hover:shadow-md transition-shadow">
-              <CardContent className="p-4 space-y-4">
+          {activeStage === "interview" ? (
+            <>
+              <Dialog open={roundEditorOpen} onOpenChange={setRoundEditorOpen}>
+                <DialogContent className="sm:max-w-[520px]">
+                  <DialogHeader>
+                    <DialogTitle>{roundEditorMode === "create" ? "Add interview round" : "Rename round"}</DialogTitle>
+                  </DialogHeader>
+                  <div className="grid gap-3">
+                    <div className="grid gap-2">
+                      <Label>Round name</Label>
+                      <Input value={roundEditorName} onChange={(e) => setRoundEditorName(e.target.value)} />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    {roundEditorMode === "rename" ? (
+                      <Button
+                        variant="destructive"
+                        onClick={() => setRoundDeleteOpen(true)}
+                        disabled={roundEditorSaving}
+                      >
+                        Delete
+                      </Button>
+                    ) : null}
+                    <Button variant="outline" onClick={() => setRoundEditorOpen(false)} disabled={roundEditorSaving}>
+                      Cancel
+                    </Button>
+                    <Button onClick={saveRoundEditor} disabled={roundEditorSaving || !roundEditorName.trim()}>
+                      {roundEditorSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Save
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              <AlertDialog open={roundDeleteOpen} onOpenChange={setRoundDeleteOpen}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete this round?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently remove the round and all interview data inside it. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={roundDeleteSaving}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={deleteRound} disabled={roundDeleteSaving}>
+                      {roundDeleteSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+
+              <div className="grid gap-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                    {interviewRounds.map((r) => {
+                      const active = r.id === interviewRoundId
+                      const roundTotal = interviewApps.filter((app) => Boolean(interviewsByKey[`${r.id}:${app.id}`])).length
+                      return (
+                        <div key={r.id} className={`flex items-center rounded-full border ${active ? "bg-purple-50 border-purple-300" : "bg-white"}`}>
+                          <button
+                            type="button"
+                            className={`px-3 py-1 text-sm ${active ? "text-purple-800" : "text-gray-700"}`}
+                            onClick={() => setInterviewRoundId(r.id)}
+                          >
+                            {r.name} <span className="text-xs text-muted-foreground">({roundTotal})</span>
+                          </button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 rounded-full"
+                            onClick={() => openRenameRound(r)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      )
+                    })}
+                    <Button variant="outline" size="sm" className="h-8 flex-shrink-0" onClick={openCreateRound}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Round
+                    </Button>
+                  </div>
+                  <Button variant="outline" size="sm" className="h-8" onClick={fetchInterviewData} disabled={interviewLoading}>
+                    {interviewLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Refresh
+                  </Button>
+                </div>
+
+                {!interviewRoundId ? (
+                  <div className="text-sm text-muted-foreground">No rounds available.</div>
+                ) : interviewApps.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg bg-gray-50/50">
+                    No candidates in Interview stage.
+                  </div>
+                ) : (
+                  (() => {
+                    const STATUS_OPTIONS = [
+                      { id: "pending", label: "Pending" },
+                      { id: "waitlist", label: "Waitlist" },
+                      { id: "on_hold", label: "On-Hold" },
+                      { id: "passed", label: "Passed" },
+                      { id: "move_next", label: "Move to Next Round" },
+                      { id: "rejected", label: "Reject" },
+                    ] as const
+
+                    const TOOLTIP_BY_STATUS: Record<string, string> = {
+                      all: "Show all candidates in this round, regardless of round status.",
+                      pending: "Not evaluated yet in this round.",
+                      waitlist: "Keep as backup for later review.",
+                      on_hold: "Paused for now (availability / internal decision pending).",
+                      passed: "Passed this round and ready for the next step.",
+                      move_next: "Move forward: creates an entry in the next round and keeps this round status.",
+                      rejected: "Rejected for this round (do not move forward).",
+                    }
+
+                    const appsInRound = interviewApps.filter((app) => Boolean(interviewsByKey[`${interviewRoundId}:${app.id}`]))
+
+                    const counts: Record<string, number> = {
+                      all: appsInRound.length,
+                      pending: 0,
+                      waitlist: 0,
+                      on_hold: 0,
+                      passed: 0,
+                      move_next: 0,
+                      rejected: 0,
+                    }
+
+                    for (const app of appsInRound) {
+                      const entry = interviewsByKey[`${interviewRoundId}:${app.id}`]
+                      const s = String(entry?.status || "pending")
+                      if (typeof counts[s] === "number") counts[s] += 1
+                      else counts.pending += 1
+                    }
+
+                    const filtered = interviewStatusFilter === "all"
+                      ? appsInRound
+                      : appsInRound.filter((app) => {
+                          const entry = interviewsByKey[`${interviewRoundId}:${app.id}`]
+                          return String(entry?.status || "pending") === interviewStatusFilter
+                        })
+
+                    return (
+                      <div className="grid gap-3">
+                        <TooltipProvider>
+                          <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-white p-2">
+                            <Button
+                              variant={interviewStatusFilter === "all" ? "default" : "outline"}
+                              size="sm"
+                              className="h-8"
+                              onClick={() => setInterviewStatusFilter("all")}
+                            >
+                              <span className="inline-flex items-center gap-1">
+                                All
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span
+                                      className="inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] leading-none opacity-80"
+                                      aria-label="All filter info"
+                                    >
+                                      !
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>{TOOLTIP_BY_STATUS.all}</TooltipContent>
+                                </Tooltip>
+                              </span>
+                              <span className="ml-2 text-xs opacity-80">{counts.all}</span>
+                            </Button>
+                            {STATUS_OPTIONS.map((s) => (
+                              <Button
+                                key={s.id}
+                                variant={interviewStatusFilter === s.id ? "default" : "outline"}
+                                size="sm"
+                                className="h-8"
+                                onClick={() => setInterviewStatusFilter(s.id)}
+                              >
+                                <span className="inline-flex items-center gap-1">
+                                  {s.label}
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span
+                                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] leading-none opacity-80"
+                                        aria-label={`${s.label} filter info`}
+                                      >
+                                        !
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>{TOOLTIP_BY_STATUS[s.id]}</TooltipContent>
+                                  </Tooltip>
+                                </span>
+                                <span className="ml-2 text-xs opacity-80">{counts[s.id]}</span>
+                              </Button>
+                            ))}
+                          </div>
+                        </TooltipProvider>
+
+                        <div className="grid gap-2">
+                          {filtered.map((app) => {
+                            const entry = interviewsByKey[`${interviewRoundId}:${app.id}`]
+                            const status = String(entry?.status || "pending")
+                            const draftKey = `${interviewRoundId}:${app.id}`
+                            const draft = interviewDraftByKey[draftKey] || { notes: String(entry?.notes || ""), scheduledAtLocal: toDateTimeLocal((entry as any)?.scheduled_at || null) }
+                            return (
+                              <Card key={app.id} className="shadow-sm border-gray-200">
+                                <CardContent className="p-4">
+                                  <div className="grid gap-4">
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <Avatar className="h-9 w-9 border border-gray-200">
+                                          <AvatarFallback className="bg-purple-100 text-purple-700">
+                                            {app.candidates?.name?.substring(0, 2).toUpperCase() || "CN"}
+                                          </AvatarFallback>
+                                        </Avatar>
+                                        <div className="min-w-0">
+                                          <div className="font-medium text-sm truncate">{app.candidates?.name || "Candidate"}</div>
+                                          <div className="text-xs text-muted-foreground truncate">{app.candidates?.current_role || ""}</div>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <Button variant="outline" size="sm" className="h-8" onClick={() => openPreview(app)}>
+                                          <Eye className="h-4 w-4 mr-2" /> View
+                                        </Button>
+                                        <Select value={app.status} onValueChange={(val) => requestStageChange(app, val)}>
+                                          <SelectTrigger className="h-8 w-36">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {STATUS_COLUMNS.map((s) => (
+                                              <SelectItem key={s.id} value={s.id}>
+                                                {s.label}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-8"
+                                          disabled={!!interviewDraftSavingByKey[draftKey]}
+                                          onClick={async () => {
+                                            setInterviewDraftSavingByKey((prev) => ({ ...prev, [draftKey]: true }))
+                                            try {
+                                              await upsertInterview(app.id, interviewRoundId, {
+                                                notes: draft.notes,
+                                                scheduled_at: draft.scheduledAtLocal ? fromDateTimeLocal(draft.scheduledAtLocal) : null,
+                                              } as any)
+                                            } finally {
+                                              setInterviewDraftSavingByKey((prev) => {
+                                                const next = { ...prev }
+                                                delete next[draftKey]
+                                                return next
+                                              })
+                                            }
+                                          }}
+                                        >
+                                          {interviewDraftSavingByKey[draftKey] ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                          Save
+                                        </Button>
+                                      </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+                                      <div className="grid gap-1 md:col-span-3">
+                                        <div className="text-xs font-medium text-muted-foreground">Round status</div>
+                                        <Select value={status} onValueChange={(v) => upsertInterview(app.id, interviewRoundId, { status: v })}>
+                                          <SelectTrigger className="h-8">
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="pending">Pending</SelectItem>
+                                            <SelectItem value="waitlist">Waitlist</SelectItem>
+                                            <SelectItem value="on_hold">On-Hold</SelectItem>
+                                            <SelectItem value="passed">Passed</SelectItem>
+                                            <SelectItem value="move_next">Move to Next Round</SelectItem>
+                                            <SelectItem value="rejected">Reject</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+
+                                      <div className="grid gap-1 md:col-span-3">
+                                        <div className="text-xs font-medium text-muted-foreground">Interview date & time</div>
+                                        <Input
+                                          type="datetime-local"
+                                          value={draft.scheduledAtLocal}
+                                          onChange={(e) =>
+                                            setInterviewDraftByKey((prev) => ({
+                                              ...prev,
+                                              [draftKey]: { ...draft, scheduledAtLocal: e.target.value }
+                                            }))
+                                          }
+                                          className="h-8"
+                                        />
+                                      </div>
+
+                                      <div className="grid gap-1 md:col-span-6">
+                                        <div className="text-xs font-medium text-muted-foreground">Notes</div>
+                                        <Textarea
+                                          value={draft.notes}
+                                          onChange={(e) =>
+                                            setInterviewDraftByKey((prev) => ({
+                                              ...prev,
+                                              [draftKey]: { ...draft, notes: e.target.value }
+                                            }))
+                                          }
+                                          className="min-h-[38px] resize-none"
+                                          placeholder="Add notes…"
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            )
+                          })}
+
+                          {filtered.length === 0 ? (
+                            <div className="text-center py-10 text-gray-400 text-sm border border-dashed rounded-lg bg-gray-50/40">
+                              No candidates
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    )
+                  })()
+                )}
+              </div>
+            </>
+          ) : null}
+
+          {activeStage !== "interview" ? (
+            <>
+              {(activeStage === "all" ? applications : applications.filter((a) => a.status === activeStage)).map((app) => (
+                <Card key={app.id} className="shadow-sm hover:shadow-md transition-shadow">
+                  <CardContent className="p-4 space-y-4">
                 <div className="flex justify-between items-start">
                     <div className="flex gap-3">
                          <Avatar className="h-10 w-10 border border-gray-200">
@@ -555,7 +1311,17 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
                             <Eye className="h-4 w-4 mr-2" />
                             View Profile
                         </Button>
-                        <Select defaultValue={app.status} onValueChange={(val) => updateStatus(app.id, val)}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8"
+                          disabled={!!candidateAiLoadingById[app.candidate_id]}
+                          onClick={() => toggleCandidateAi(app.candidate_id)}
+                        >
+                          {candidateAiLoadingById[app.candidate_id] ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+                          AI
+                        </Button>
+                        <Select value={app.status} onValueChange={(val) => requestStageChange(app, val)}>
                             <SelectTrigger className="h-8 w-36">
                                 <SelectValue />
                             </SelectTrigger>
@@ -630,13 +1396,43 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
                         </div>
                     )}
                 </div>
+
+                {candidateAiById[app.candidate_id]?.summary && candidateAiById[app.candidate_id]?.visible ? (
+                  <div className="rounded-lg border bg-purple-50/40 p-3">
+                    <div className="text-xs font-semibold text-purple-700 mb-1">AI Analysis</div>
+                    <div className="text-sm text-gray-700 whitespace-pre-wrap">
+                      {candidateAiById[app.candidate_id].expanded
+                        ? candidateAiById[app.candidate_id].summary
+                        : candidateAiById[app.candidate_id].summary.length > 260
+                          ? candidateAiById[app.candidate_id].summary.slice(0, 260) + "…"
+                          : candidateAiById[app.candidate_id].summary}
+                    </div>
+                    {candidateAiById[app.candidate_id].summary.length > 260 ? (
+                      <div className="mt-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() =>
+                            setCandidateAiById((prev) => ({
+                              ...prev,
+                              [app.candidate_id]: { ...prev[app.candidate_id], expanded: !prev[app.candidate_id].expanded }
+                            }))
+                          }
+                        >
+                          {candidateAiById[app.candidate_id].expanded ? "View less" : "View more"}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </CardContent>
               </Card>
-          ))}
+              ))}
 
-          {(activeStage === "all" 
-              ? applications.length === 0 
-              : applications.filter((a) => a.status === activeStage).length === 0) && (
+              {(activeStage === "all"
+                ? applications.length === 0
+                : applications.filter((a) => a.status === activeStage).length === 0) && (
               <div className="text-center py-12 text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg bg-gray-50/50">
                   <div className="flex flex-col items-center">
                       <div className="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center mb-3">
@@ -645,7 +1441,9 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
                       <p>No candidates in this stage</p>
                   </div>
               </div>
-          )}
+              )}
+            </>
+          ) : null}
           </>
         )}
         </div>

@@ -5,6 +5,7 @@ import { CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ArrowLeft, ExternalLink } from "lucide-react"
 import MatchesClient from "@/components/job-matches-client"
+import { getBoardJobApplyUrl } from "@/lib/utils"
 
 interface JobPageProps {
   params: Promise<{ id: string }>
@@ -32,14 +33,14 @@ export default async function MatchesPage(props: JobPageProps) {
           {job && (
             <>
               <Badge variant="secondary" className="text-sm px-3 py-1">
-                {job.department}
+                {job.industry || job.department_category || ""}
               </Badge>
               <Badge variant="outline" className="text-sm px-3 py-1">
-                {job.type}
+                {String(job.employment_type || "").replace(/_/g, " ")}
               </Badge>
               <span className="text-sm text-gray-500 dark:text-gray-400">{job.location}</span>
               <a
-                href={`/board/${id}`}
+                href={getBoardJobApplyUrl(id)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="ml-auto flex items-center gap-1 text-blue-600 hover:underline"
@@ -57,4 +58,3 @@ export default async function MatchesPage(props: JobPageProps) {
     </div>
   )
 }
-

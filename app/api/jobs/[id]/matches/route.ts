@@ -43,7 +43,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       const baseText = [
         job.title || "",
         job.description || "",
-        Array.isArray(job.requirements) ? job.requirements.join(", ") : (job.requirements || "")
       ].join("\n").trim()
 
       const candidates = await SupabaseCandidateService.getAllCandidates()

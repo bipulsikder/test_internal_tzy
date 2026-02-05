@@ -11,42 +11,71 @@ export const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-// Ensure the resume-files bucket exists
-export async function ensureResumeBucketExists() {
-  try {
-    // Check if bucket exists
-    const { data: buckets, error: listError } = await supabaseAdmin.storage.listBuckets()
-    
-    if (listError) {
-      console.error('Error checking buckets:', listError)
-      throw listError
-    }
-    
-    const bucketExists = buckets?.some(bucket => bucket.name === 'resume-files')
-    
-    if (!bucketExists) {
-      console.log('Creating resume-files bucket...')
-      const { error: createError } = await supabaseAdmin.storage.createBucket('resume-files', {
-        public: true,
-        fileSizeLimit: 10485760, // 10MB
-        allowedMimeTypes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'text/plain']
-      })
-      
-      if (createError) {
-        console.error('Error creating bucket:', createError)
-        throw createError
-      }
-      
-      console.log('✅ resume-files bucket created successfully')
-    } else {
-      console.log('✅ resume-files bucket already exists')
-    }
-    
-    return true
-  } catch (error) {
-    console.error('Failed to ensure resume bucket exists:', error)
+async function ensureBucketExists(params: {
+  bucketName: string
+  public: boolean
+  fileSizeLimit?: number
+  allowedMimeTypes?: string[]
+}) {
+  const { data: buckets, error: listError } = await supabaseAdmin.storage.listBuckets()
+  if (listError) {
+    console.error('Error checking buckets:', listError)
     return false
   }
+
+  const existing = buckets?.find(bucket => bucket.name === params.bucketName)
+
+  if (!existing) {
+    const { error: createError } = await supabaseAdmin.storage.createBucket(params.bucketName, {
+      public: params.public,
+      ...(typeof params.fileSizeLimit === 'number' ? { fileSizeLimit: params.fileSizeLimit } : {}),
+      ...(params.allowedMimeTypes ? { allowedMimeTypes: params.allowedMimeTypes } : {}),
+    })
+
+    if (createError) {
+      console.error('Error creating bucket:', createError)
+      return false
+    }
+
+    return true
+  }
+
+  if (typeof (existing as any)?.public === 'boolean' && (existing as any).public !== params.public) {
+    const { error: updateError } = await supabaseAdmin.storage.updateBucket(params.bucketName, {
+      public: params.public,
+      ...(typeof params.fileSizeLimit === 'number' ? { fileSizeLimit: params.fileSizeLimit } : {}),
+      ...(params.allowedMimeTypes ? { allowedMimeTypes: params.allowedMimeTypes } : {}),
+    })
+    if (updateError) {
+      console.error('Error updating bucket:', updateError)
+      return false
+    }
+  }
+
+  return true
+}
+
+export async function ensureResumeBucketExists() {
+  return ensureBucketExists({
+    bucketName: 'resume-files',
+    public: true,
+    fileSizeLimit: 10485760,
+    allowedMimeTypes: [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+      'text/plain',
+    ],
+  })
+}
+
+export async function ensureClientLogosBucketExists() {
+  return ensureBucketExists({
+    bucketName: 'client-logos',
+    public: true,
+    fileSizeLimit: 5242880,
+    allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'],
+  })
 }
 
 // Database types (generated from your schema)

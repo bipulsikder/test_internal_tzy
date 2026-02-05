@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
       .select(`
         *,
         candidates:candidate_id (*),
-        jobs:job_id (title, department)
+        jobs:job_id (title, industry, sub_category)
       `)
       .order("applied_at", { ascending: false })
 

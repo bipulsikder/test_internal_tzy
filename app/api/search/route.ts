@@ -104,7 +104,14 @@ async function jdBasedSearch(jobDescription: string, candidates: any[]): Promise
 }
 
 // Helper function to process pagination and add AI summaries
-async function processResultsWithSummary(results: any[], page: number, perPage: number, paginate: boolean, requirements: any) {
+async function processResultsWithSummary(
+  results: any[],
+  page: number,
+  perPage: number,
+  paginate: boolean,
+  requirements: any,
+  includeSummary: boolean
+) {
     let items = results;
     let total = results.length;
     let currentPage = page;
@@ -116,18 +123,15 @@ async function processResultsWithSummary(results: any[], page: number, perPage: 
         items = results.slice(startIdx, startIdx + perPage)
     }
 
-    // Generate AI Summaries for the returned page of items in parallel
-    // This adds ~1-2s latency but provides high value "Why matched/Why not" summaries
-    if (items.length > 0) {
-        console.log(`Generating AI summaries for ${items.length} candidates...`)
-        const summaryPromises = items.map(async (candidate) => {
-            const summary = await generateCandidateSummary(candidate, requirements);
-            return {
-                ...candidate,
-                matchSummary: summary 
-            };
-        });
-        items = await Promise.all(summaryPromises);
+    if (includeSummary && items.length > 0) {
+      const summaryPromises = items.map(async (candidate) => {
+        const summary = await generateCandidateSummary(candidate, requirements)
+        return {
+          ...candidate,
+          matchSummary: summary
+        }
+      })
+      items = await Promise.all(summaryPromises)
     }
 
     if (paginate) {
@@ -158,6 +162,7 @@ export async function GET(request: NextRequest) {
     const paginate     = searchParams.get('paginate') === 'true'
     const page         = Number(searchParams.get('page') ?? '1')
     const perPage      = Number(searchParams.get('perPage') ?? '25')
+    const includeSummary = searchParams.get('includeSummary') === 'true' || searchParams.get('includeSummary') === '1'
 
     // Build filters object from individual keys
     const filters: any = {}
@@ -396,7 +401,7 @@ export async function GET(request: NextRequest) {
     console.log(`Filtered ${results.length} results to ${filteredResults.length} relevant candidates (threshold: ${MIN_RELEVANCE_THRESHOLD}, strict role matching enabled)`)
 
     // Process pagination and generate summaries
-    const responseData = await processResultsWithSummary(filteredResults, page, perPage, paginate, activeRequirements);
+    const responseData = await processResultsWithSummary(filteredResults, page, perPage, paginate, activeRequirements, includeSummary);
 
     // Log the search if HR user is logged in
     const hrUserCookie = request.cookies.get("hr_user")?.value

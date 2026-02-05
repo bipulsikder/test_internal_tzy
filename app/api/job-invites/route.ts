@@ -30,7 +30,10 @@ export async function GET(request: NextRequest) {
     .eq("job_id", jobId)
     .order("created_at", { ascending: false })
 
-  if (error) return NextResponse.json({ error: "Failed to load invites" }, { status: 500 })
+  if (error) {
+    console.error("Failed to load invites:", error)
+    return NextResponse.json({ error: error.message || "Failed to load invites" }, { status: 500 })
+  }
   return NextResponse.json({ invites: data || [] })
 }
 
@@ -45,6 +48,7 @@ export async function POST(request: NextRequest) {
   const jobId = typeof body?.jobId === "string" ? body.jobId : null
   const candidateId = typeof body?.candidateId === "string" ? body.candidateId : null
   const emailFromBody = typeof body?.email === "string" ? body.email.trim() : null
+  const resend = body?.resend === true
   if (!jobId) return NextResponse.json({ error: "Missing jobId" }, { status: 400 })
   if (!candidateId && !emailFromBody) return NextResponse.json({ error: "Missing candidateId/email" }, { status: 400 })
 
@@ -57,31 +61,87 @@ export async function POST(request: NextRequest) {
 
   const token = createToken()
   const now = nowIso()
-
-  const { data: invite, error } = await supabaseAdmin
-    .from("job_invites")
-    .insert({
-      job_id: jobId,
-      candidate_id: candidateId,
-      email,
-      token,
-      status: "sent",
-      sent_at: now,
-      created_at: now,
-      updated_at: now,
-      metadata: { source: "internal" }
-    })
-    .select("id, token")
-    .single()
-
-  if (error) return NextResponse.json({ error: "Failed to create invite" }, { status: 500 })
+  const from = process.env.INVITES_FROM || process.env.SMTP_USER || ""
 
   const base = process.env.BOARD_APP_BASE_URL || process.env.NEXT_PUBLIC_BOARD_APP_BASE_URL
-  const link = base ? `${base.replace(/\/$/, "")}/invite/${token}` : `/invite/${token}`
+  const buildLink = (t: string) => (base ? `${base.replace(/\/$/, "")}/invite/${t}` : `/invite/${t}`)
+
+  let invite: any = null
+  let error: any = null
+  let tokenToUse = token
+  for (let i = 0; i < 3; i++) {
+    const attemptToken = i === 0 ? tokenToUse : createToken()
+    const res = await supabaseAdmin
+      .from("job_invites")
+      .insert({
+        job_id: jobId,
+        candidate_id: candidateId,
+        email,
+        token: attemptToken,
+        status: "sent",
+        sent_at: now,
+        created_at: now,
+        updated_at: now,
+        metadata: { source: "internal" }
+      })
+      .select("id, token")
+      .single()
+    invite = res.data
+    error = res.error
+    tokenToUse = attemptToken
+    if (!error) break
+
+    if (String(error?.message || "").toLowerCase().includes("job_invites_job_email_unique") || error?.code === "23505") {
+      const { data: existing } = await supabaseAdmin
+        .from("job_invites")
+        .select("id, token")
+        .eq("job_id", jobId)
+        .eq("email", email)
+        .maybeSingle()
+
+      if (existing?.token) {
+        const link = buildLink(existing.token)
+
+        let emailSent = false
+        let emailError: string | null = null
+        if (resend && from) {
+          const { data: job } = await supabaseAdmin.from("jobs").select("title").eq("id", jobId).maybeSingle()
+          const jobTitle = (job?.title as string | undefined) || "a role"
+          const subject = `Truckinzy: Invitation to apply — ${jobTitle}`
+
+          try {
+            await sendInviteEmail({
+              to: email,
+              from,
+              subject,
+              jobTitle,
+              inviteLink: link
+            })
+            emailSent = true
+            await supabaseAdmin
+              .from("job_invites")
+              .update({ status: "sent", sent_at: now, updated_at: now })
+              .eq("id", existing.id)
+          } catch (e: any) {
+            emailError = e?.message || "Failed to send email"
+          }
+        }
+
+        return NextResponse.json({ invite: existing, link, emailSent, emailError }, { status: 200 })
+      }
+      return NextResponse.json({ error: "Invite already exists for this email" }, { status: 409 })
+    }
+  }
+
+  if (error) {
+    console.error("Invite create failed:", error)
+    return NextResponse.json({ error: error.message || "Failed to create invite" }, { status: 500 })
+  }
+
+  const link = buildLink(tokenToUse)
 
   let emailSent = false
   let emailError: string | null = null
-  const from = process.env.INVITES_FROM || process.env.SMTP_USER || ""
 
   if (from) {
     const { data: job } = await supabaseAdmin.from("jobs").select("title").eq("id", jobId).maybeSingle()

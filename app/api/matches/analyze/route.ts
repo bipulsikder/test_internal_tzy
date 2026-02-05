@@ -7,16 +7,31 @@ const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash"
 
 export async function POST(request: NextRequest) {
   try {
-    const { jobId, candidateId } = await request.json()
+    const { jobId, candidateId, force } = await request.json()
     
     if (!jobId || !candidateId) {
       return NextResponse.json({ error: "Missing jobId or candidateId" }, { status: 400 })
     }
 
+    const { data: existingMatch } = await supabaseAdmin
+      .from("job_matches")
+      .select("match_summary")
+      .eq("job_id", jobId)
+      .eq("candidate_id", candidateId)
+      .maybeSingle()
+
+    const existingText = typeof existingMatch?.match_summary === "string" ? existingMatch.match_summary.trim() : ""
+    const looksStructured = Boolean(existingText) && existingText.startsWith("Fit:")
+    const tooLong = Boolean(existingText) && existingText.length > 900
+
+    if (!force && existingText && looksStructured && !tooLong) {
+      return NextResponse.json({ summary: existingText, cached: true })
+    }
+
     // 1. Fetch Job
     const { data: job, error: jobError } = await supabaseAdmin
       .from("jobs")
-      .select("title, description, requirements, department, location")
+      .select("title, description, industry, location, city, employment_type, shift_type, salary_type, salary_min, salary_max, openings, education_min, experience_min_years, experience_max_years, english_level, license_type, age_min, age_max, gender_preference, skills_must_have, skills_good_to_have")
       .eq("id", jobId)
       .single()
 
@@ -43,67 +58,61 @@ export async function POST(request: NextRequest) {
     const model = genAI.getGenerativeModel({ model: DEFAULT_GEMINI_MODEL })
     
     const prompt = `
-    You are an expert HR recruiter. Analyze the match between this candidate and job.
-    
-    JOB DETAILS:
-    Title: ${job.title}
-    Department: ${job.department}
-    Location: ${job.location}
-    Description: ${job.description?.substring(0, 500)}...
-    Requirements: ${Array.isArray(job.requirements) ? job.requirements.join(", ") : job.requirements}
+You are an expert recruiter. Write a SHORT, structured match analysis.
 
-    CANDIDATE DETAILS:
-    Name: ${candidate.name}
-    Role: ${candidate.current_role}
-    Experience: ${candidate.total_experience}
-    Skills: ${Array.isArray(candidate.technical_skills) ? candidate.technical_skills.join(", ") : candidate.technical_skills}
-    Summary: ${candidate.summary}
+Return EXACTLY this format (no extra text):
 
-    TASK:
-    Provide a concise analysis (max 3 paragraphs) covering:
-    1. Why they are a good fit (Strengths)
-    2. Potential gaps or areas to probe (Weaknesses)
-    3. Final recommendation (Strong Match / Potential Match / Risky)
+Fit: <Strong Match | Potential Match | Risky>
+Strengths:
+- <bullet>
+- <bullet>
+Risks:
+- <bullet>
+- <bullet>
+Interview probes:
+- <bullet>
+- <bullet>
 
-    Format as plain text or markdown.
-    `
+Rules:
+- Max 150 words total.
+- Use concrete job requirements (skills, location, experience).
+- If info is missing, say "Unknown" briefly.
+
+JOB:
+- Title: ${job.title}
+- Location: ${[job.city, job.location].filter(Boolean).join(", ")}
+- Experience: ${job.experience_min_years || 0}-${job.experience_max_years || 0} years
+- Must-have skills: ${Array.isArray(job.skills_must_have) ? job.skills_must_have.join(", ") : ""}
+- Good-to-have skills: ${Array.isArray(job.skills_good_to_have) ? job.skills_good_to_have.join(", ") : ""}
+- JD: ${(job.description || "").substring(0, 350)}
+
+CANDIDATE:
+- Name: ${candidate.name}
+- Current role: ${candidate.current_role}
+- Location: ${candidate.location}
+- Experience: ${candidate.total_experience}
+- Skills: ${Array.isArray(candidate.technical_skills) ? candidate.technical_skills.slice(0, 20).join(", ") : candidate.technical_skills}
+- Summary: ${(candidate.summary || "").substring(0, 250)}
+`
 
     const result = await model.generateContent(prompt)
-    const analysis = result.response.text()
+    const analysis = result.response.text().trim()
 
-    // 4. Save to job_matches
-    // We use upsert to ensure we don't create duplicates, but we only update match_summary
-    // We assume the match row might already exist from the initial lightweight matching
-    
-    // First check if match exists to preserve other fields like relevance_score
-    const { data: existingMatch } = await supabaseAdmin
-        .from("job_matches")
-        .select("*")
-        .eq("job_id", jobId)
-        .eq("candidate_id", candidateId)
-        .single()
-        
-    const matchData = {
-        job_id: jobId,
-        candidate_id: candidateId,
-        match_summary: analysis,
-        // If it didn't exist (edge case), we might want to set other fields, but let's assume it exists or we just set what we have
-        updated_at: new Date().toISOString()
-    }
+    const now = new Date().toISOString()
 
     if (existingMatch) {
-        await supabaseAdmin
-            .from("job_matches")
-            .update({ match_summary: analysis, updated_at: new Date().toISOString() })
-            .eq("job_id", jobId)
-            .eq("candidate_id", candidateId)
+      await supabaseAdmin
+        .from("job_matches")
+        .update({ match_summary: analysis, updated_at: now })
+        .eq("job_id", jobId)
+        .eq("candidate_id", candidateId)
     } else {
-        await supabaseAdmin
-            .from("job_matches")
-            .insert(matchData)
+      await supabaseAdmin
+        .from("job_matches")
+        .insert({ job_id: jobId, candidate_id: candidateId, match_summary: analysis, updated_at: now })
     }
 
-    return NextResponse.json({ summary: analysis })
+    return NextResponse.json({ summary: analysis, cached: false })
   } catch (error: any) {
     console.error("AI Analysis error:", error)
     return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 })

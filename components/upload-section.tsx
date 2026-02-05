@@ -32,6 +32,13 @@ interface UploadedFile {
   progress: number
   result?: any
   error?: string
+  blockedInfo?: {
+    category?: string
+    details?: string
+    suggestions?: string[]
+    docType?: string
+    confidence?: number
+  }
   failureInfo?: {
     httpStatus?: number
     error?: string
@@ -205,13 +212,20 @@ export function UploadSection() {
                     status: "blocked" as UploadedFile["status"],
                     progress: 0,
                     error: result.error || "Invalid or incomplete profile",
+                    blockedInfo: {
+                      category: result.blockedCategory || "blocked",
+                      details: result.details || result.error || "Blocked",
+                      suggestions: result.suggestions || [],
+                      docType: result.docType,
+                      confidence: result.confidence,
+                    },
                   }
                 : f,
             ),
           )
           toast({
             title: "Upload Blocked",
-            description: `Profile incomplete: ${result.error || "Invalid or incomplete profile"}`,
+            description: result.details || result.error || "This file was blocked",
             variant: "destructive",
           })
           return
@@ -656,6 +670,64 @@ export function UploadSection() {
                             <p><strong>Candidate:</strong> {uploadedFile.result.duplicateInfo.existingName}</p>
                             <p><strong>Reason:</strong> {uploadedFile.result.duplicateInfo.reason}</p>
                             <p><strong>ID:</strong> {uploadedFile.result.duplicateInfo.existingId}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Blocked Upload */}
+                  {uploadedFile.status === "blocked" && (
+                    <div className="mt-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                      <div className="flex items-start space-x-2">
+                        <AlertTriangle className="h-5 w-5 text-amber-700 mt-0.5 flex-shrink-0" />
+                        <div className="flex-1">
+                          <h4 className="font-medium text-amber-900">Upload Blocked</h4>
+                          <p className="text-sm text-amber-800 mt-1">
+                            {uploadedFile.blockedInfo?.details || uploadedFile.error || "This file was blocked."}
+                          </p>
+                          {uploadedFile.blockedInfo?.category === "not_resume" && (
+                            <div className="mt-2 text-xs text-amber-800">
+                              Detected type: {String(uploadedFile.blockedInfo?.docType || "unknown")}
+                              {typeof uploadedFile.blockedInfo?.confidence === "number" && (
+                                <> • Confidence: {Math.round(uploadedFile.blockedInfo.confidence * 100)}%</>
+                              )}
+                            </div>
+                          )}
+
+                          {uploadedFile.blockedInfo?.suggestions && uploadedFile.blockedInfo.suggestions.length > 0 && (
+                            <div className="mt-3 bg-white p-3 rounded border border-amber-100">
+                              <h5 className="font-medium text-amber-900 mb-2">What to upload instead</h5>
+                              <ul className="text-sm text-amber-800 space-y-1">
+                                {uploadedFile.blockedInfo.suggestions.map((s, idx) => (
+                                  <li key={idx} className="flex items-start space-x-2">
+                                    <span className="text-amber-700 mt-1">•</span>
+                                    <span>{s}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          <div className="mt-4 flex space-x-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => retryFile(index)}
+                              className="border-amber-200 text-amber-900 hover:bg-amber-100"
+                            >
+                              <RefreshCw className="h-4 w-4 mr-2" />
+                              Try Again
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => removeFile(index)}
+                              className="border-amber-200 text-amber-900 hover:bg-amber-100"
+                            >
+                              <X className="h-4 w-4 mr-2" />
+                              Remove File
+                            </Button>
                           </div>
                         </div>
                       </div>

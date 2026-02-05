@@ -45,30 +45,94 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { title, description, industry, sub_category, location, type, requirements, salary_range, status, positions, client_name, client_id, amount, skills_required, experience } = body
+    const {
+      title,
+      description,
+      industry,
+      sub_category,
+      location,
+      city,
+      apply_type,
+      external_apply_url,
+      salary_type,
+      salary_min,
+      salary_max,
+      shift_type,
+      employment_type,
+      urgency_tag,
+      openings,
+      education_min,
+      experience_min_years,
+      experience_max_years,
+      languages_required,
+      english_level,
+      license_type,
+      age_min,
+      age_max,
+      gender_preference,
+      role_category,
+      department_category,
+      skills_must_have,
+      skills_good_to_have,
+      status,
+      client_name,
+      client_id,
+      sections,
+    } = body || {}
 
     if (!title) {
       return NextResponse.json({ error: "Title is required" }, { status: 400 })
     }
+
+    const normalizeOptionalString = (value: unknown) => {
+      if (typeof value !== "string") return null
+      const trimmed = value.trim()
+      return trimmed.length ? trimmed : null
+    }
+
+    const normalizedEmploymentType = typeof employment_type === "string" ? employment_type : null
+    const normalizedShiftType = typeof shift_type === "string" ? shift_type : null
+    const normalizedSalaryType = typeof salary_type === "string" ? salary_type : null
+    const normalizedOpenings = typeof openings === "number" ? openings : null
+    const normalizedApplyType = apply_type === "external" ? "external" : "in_platform"
+    const normalizedExternalApplyUrl = normalizeOptionalString(external_apply_url)
+
+    const safeArray = (v: any): any[] | null => (Array.isArray(v) ? v.filter((x) => x !== null && x !== undefined) : null)
 
     const { data, error } = await supabaseAdmin
       .from("jobs")
       .insert({
         title,
         description,
-        department: industry, // Backward compat: map industry -> department
-        sub_category: typeof sub_category === "string" && sub_category.length ? sub_category : null,
+        industry: normalizeOptionalString(industry),
+        sub_category: normalizeOptionalString(sub_category),
         location,
-        type,
-        requirements,
-        salary_range,
+        city: normalizeOptionalString(city),
+        apply_type: normalizedApplyType,
+        external_apply_url: normalizedApplyType === "external" ? normalizedExternalApplyUrl : null,
+        salary_type: normalizedSalaryType,
+        salary_min: typeof salary_min === "number" ? salary_min : null,
+        salary_max: typeof salary_max === "number" ? salary_max : null,
+        shift_type: normalizedShiftType,
+        employment_type: normalizedEmploymentType,
+        urgency_tag: normalizeOptionalString(urgency_tag),
+        openings: normalizedOpenings,
+        education_min: normalizeOptionalString(education_min),
+        experience_min_years: typeof experience_min_years === "number" ? experience_min_years : null,
+        experience_max_years: typeof experience_max_years === "number" ? experience_max_years : null,
+        languages_required: safeArray(languages_required),
+        english_level: normalizeOptionalString(english_level),
+        license_type: normalizeOptionalString(license_type),
+        age_min: typeof age_min === "number" ? age_min : null,
+        age_max: typeof age_max === "number" ? age_max : null,
+        gender_preference: normalizeOptionalString(gender_preference),
+        role_category: normalizeOptionalString(role_category),
+        department_category: normalizeOptionalString(department_category),
+        skills_must_have: safeArray(skills_must_have),
+        skills_good_to_have: safeArray(skills_good_to_have),
         status: status || 'open',
-        positions,
         client_name,
-        client_id: typeof client_id === "string" && client_id.length ? client_id : null,
-        amount: typeof amount === "string" && amount.length ? amount : null,
-        skills_required: Array.isArray(skills_required) ? skills_required : null,
-        experience
+        client_id: normalizeOptionalString(client_id),
       })
       .select()
       .single()
@@ -78,14 +142,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
+    const jobId = data.id
+
+    if (Array.isArray(sections) && sections.length > 0) {
+      try {
+        await supabaseAdmin.from("job_sections").delete().eq("job_id", jobId)
+        const rows = sections
+          .filter((s: any) => s && typeof s.section_key === "string" && typeof s.heading === "string" && typeof s.body_md === "string")
+          .map((s: any, idx: number) => ({
+            job_id: jobId,
+            section_key: s.section_key,
+            heading: s.heading,
+            body_md: s.body_md,
+            sort_order: typeof s.sort_order === "number" ? s.sort_order : idx,
+            is_visible: typeof s.is_visible === "boolean" ? s.is_visible : true,
+          }))
+        if (rows.length) {
+          const { error: sErr } = await supabaseAdmin.from("job_sections").insert(rows)
+          if (sErr) console.warn("Failed to save job sections:", sErr)
+        }
+      } catch (e) {
+        console.warn("Failed to save job sections:", e)
+      }
+    }
+
     // Trigger initial match generation (without heavy AI insights per candidate)
     try {
-        console.log("Generating initial matches for job:", data.id)
-        const baseText = [
-            data.title || "",
-            data.description || "",
-            Array.isArray(data.requirements) ? data.requirements.join(", ") : (data.requirements || "")
-        ].join("\n").trim()
+        console.log("Generating initial matches for job:", jobId)
+        const baseText = [data.title || "", data.description || ""].join("\n").trim()
         
         const candidates = await SupabaseCandidateService.getAllCandidates()
         // This uses Gemini only once to parse requirements, which is fast enough
@@ -94,7 +178,7 @@ export async function POST(request: NextRequest) {
         const ranked = await intelligentCandidateSearch(parsedRequirements, candidates)
         
         const matches = ranked.map((c: any) => ({
-            job_id: data.id,
+            job_id: jobId,
             candidate_id: c.id,
             relevance_score: c.relevanceScore || 0,
             match_summary: null, // No AI insight initially as requested
@@ -111,7 +195,7 @@ export async function POST(request: NextRequest) {
              if (matchError) {
                  console.warn("Failed to store initial matches:", matchError)
              } else {
-                 console.log(`Stored ${matches.length} initial matches for job ${data.id}`)
+                 console.log(`Stored ${matches.length} initial matches for job ${jobId}`)
              }
         }
     } catch (matchErr) {

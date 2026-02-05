@@ -409,12 +409,17 @@ export function AnalyticsDashboard() {
 
         <TabsContent value="search" className="mt-6">
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Search className="h-5 w-5" />
-                Detailed Search Logs
-              </CardTitle>
-              <CardDescription>View and download your search history</CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Search className="h-5 w-5" />
+                  Detailed Search Logs
+                </CardTitle>
+                <CardDescription>View and download your search history</CardDescription>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Rows: {logsLoading ? "…" : searchLogs.length}
+              </div>
             </CardHeader>
             <CardContent>
               <div className="rounded-md border">
@@ -459,12 +464,17 @@ export function AnalyticsDashboard() {
 
         <TabsContent value="uploads" className="mt-6">
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Upload className="h-5 w-5" />
-                Detailed Upload Logs
-              </CardTitle>
-              <CardDescription>View and download your resume upload history</CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Upload className="h-5 w-5" />
+                  Detailed Upload Logs
+                </CardTitle>
+                <CardDescription>View and download your resume upload history</CardDescription>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Rows: {logsLoading ? "…" : uploadLogs.length}
+              </div>
             </CardHeader>
             <CardContent>
               <div className="rounded-md border">

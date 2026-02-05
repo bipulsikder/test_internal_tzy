@@ -1,6 +1,15 @@
-import { supabase, supabaseAdmin } from './supabase'
+import { supabaseAdmin } from './supabase'
 
-export const BUCKET_NAME = 'resume-files'
+export const RESUME_BUCKET_NAME = 'resume-files'
+export const CLIENT_LOGOS_BUCKET_NAME = 'client-logos'
+
+export const BUCKET_NAME = RESUME_BUCKET_NAME
+
+function extractStoragePath(input: string, bucketName: string) {
+  const idx = input.indexOf(`${bucketName}/`)
+  if (idx >= 0) return input.slice(idx + bucketName.length + 1)
+  return input.replace(/^\/+/, '')
+}
 
 /**
  * Check if a file exists in Supabase Storage by name or path
@@ -9,8 +18,6 @@ export const BUCKET_NAME = 'resume-files'
  */
 export async function checkFileExistsInSupabase(fileName: string): Promise<{ exists: boolean; url?: string; path?: string }> {
   try {
-    console.log(`Checking if file exists in Supabase storage: ${fileName}`)
-    
     // List all files in the bucket using admin client to bypass RLS
     const { data: files, error } = await supabaseAdmin.storage
       .from(BUCKET_NAME)
@@ -47,10 +54,8 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
       }
     }
     
-    console.log(`❌ File not found in Supabase storage: ${fileName}`)
     return { exists: false }
   } catch (error) {
-    console.error('❌ Error checking file existence in Supabase storage:', error)
     // If we can't check, assume it doesn't exist and proceed with upload
     return { exists: false }
   }
@@ -62,12 +67,17 @@ export async function checkFileExistsInSupabase(fileName: string): Promise<{ exi
  * @param fileName The filename to use in storage
  * @returns Object with url and path of the uploaded file
  */
-export async function uploadFileToSupabase(file: File | Blob, fileName: string): Promise<{ url: string; path: string }> {
+export async function uploadFileToSupabase(
+  file: File | Blob,
+  fileName: string,
+  options?: { bucketName?: string }
+): Promise<{ url: string; path: string }> {
   try {
+    const bucketName = options?.bucketName || BUCKET_NAME
     const contentType = (file as any)?.type || undefined
     // Upload the file using admin client to bypass RLS policies
     const { data, error } = await supabaseAdmin.storage
-      .from(BUCKET_NAME)
+      .from(bucketName)
       .upload(fileName, file, {
         cacheControl: '3600',
         upsert: true,
@@ -81,12 +91,11 @@ export async function uploadFileToSupabase(file: File | Blob, fileName: string):
     
     // Get the public URL
     const { data: { publicUrl } } = supabaseAdmin.storage
-      .from(BUCKET_NAME)
+      .from(bucketName)
       .getPublicUrl(data.path)
     
     return { url: publicUrl, path: data.path }
   } catch (error) {
-    console.error('❌ Failed to upload to Supabase Storage:', error)
     throw error
   }
 }
@@ -96,19 +105,14 @@ export async function uploadFileToSupabase(file: File | Blob, fileName: string):
  * @param url The URL or path of the file to delete
  * @returns Boolean indicating success
  */
-export async function deleteFileFromSupabase(url: string): Promise<boolean> {
+export async function deleteFileFromSupabase(urlOrPath: string, options?: { bucketName?: string }): Promise<boolean> {
   try {
-    console.log(`Deleting file from Supabase Storage: ${url}`)
-    
-    // Extract the path from the URL if it's a full URL
-    let path = url
-    if (url.includes('resume-files/')) {
-      path = url.split('resume-files/')[1]
-    }
+    const bucketName = options?.bucketName || BUCKET_NAME
+    const path = extractStoragePath(urlOrPath, bucketName)
     
     // Delete the file using admin client to bypass RLS
     const { error } = await supabaseAdmin.storage
-      .from(BUCKET_NAME)
+      .from(bucketName)
       .remove([path])
     
     if (error) {
@@ -116,10 +120,8 @@ export async function deleteFileFromSupabase(url: string): Promise<boolean> {
       throw error
     }
     
-    console.log(`✅ File deleted from Supabase Storage: ${path}`)
     return true
   } catch (error) {
-    console.error('❌ Failed to delete from Supabase Storage:', error)
     return false
   }
 }

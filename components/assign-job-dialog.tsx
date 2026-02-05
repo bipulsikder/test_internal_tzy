@@ -7,7 +7,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
@@ -34,7 +33,8 @@ export function AssignJobDialog({ candidateId, open, onOpenChange, candidateName
   const [fetchingJobs, setFetchingJobs] = useState(false)
   const [selectedJob, setSelectedJob] = useState<string>("")
   const [notes, setNotes] = useState("")
-  const [sendInvite, setSendInvite] = useState(true)
+  const [action, setAction] = useState<"assign" | "invite" | "both">("assign")
+  const [stage, setStage] = useState<string>("shortlist")
   const { toast } = useToast()
 
   useEffect(() => {
@@ -62,59 +62,47 @@ export function AssignJobDialog({ candidateId, open, onOpenChange, candidateName
     if (!selectedJob) return
     setLoading(true)
     try {
-      const res = await fetch("/api/applications", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          job_id: selectedJob,
-          candidate_id: candidateId,
-          notes
+      const shouldAssign = action !== "invite"
+      const shouldInvite = action !== "assign"
+
+      if (shouldAssign) {
+        const res = await fetch("/api/applications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: selectedJob,
+            candidate_id: candidateId,
+            status: stage,
+            source: "database",
+            notes
+          })
         })
-      })
 
-      const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to assign")
+        const data = await res.json().catch(() => null)
+        if (!res.ok) throw new Error(data?.error || "Failed to assign")
       }
 
-      toast({
-        title: "Success",
-        description: `Candidate assigned to job successfully`,
-      })
-
-      if (sendInvite) {
-        try {
-          const inv = await fetch("/api/job-invites", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jobId: selectedJob, candidateId })
-          })
-          const data = await inv.json().catch(() => null)
-          if (inv.ok && data?.link) {
-            toast({
-              title: "Invite link created",
-              description: data.link
-            })
-          } else if (data?.error) {
-            toast({
-              title: "Invite not sent",
-              description: data.error,
-              variant: "destructive"
-            })
-          }
-        } catch (e: any) {
-          toast({
-            title: "Invite not sent",
-            description: e.message || "Failed to create invite",
-            variant: "destructive"
-          })
-        }
+      if (shouldInvite) {
+        const inv = await fetch("/api/job-invites", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId: selectedJob, candidateId, resend: true })
+        })
+        const data = await inv.json().catch(() => null)
+        if (!inv.ok) throw new Error(data?.error || "Failed to create invite")
+        toast({
+          title: shouldAssign ? "Saved" : "Invite created",
+          description: data?.emailSent ? "Invite email sent." : "Invite link ready."
+        })
+      } else {
+        toast({ title: "Saved", description: "Candidate assigned successfully." })
       }
 
       onOpenChange(false)
       setSelectedJob("")
       setNotes("")
+      setAction("assign")
+      setStage("shortlist")
     } catch (error: any) {
       toast({
         title: "Error",
@@ -154,6 +142,42 @@ export function AssignJobDialog({ candidateId, open, onOpenChange, candidateName
               </SelectContent>
             </Select>
           </div>
+
+          <div className="grid gap-2">
+            <Label>Action</Label>
+            <Select value={action} onValueChange={(v) => setAction(v as any)}>
+              <SelectTrigger className="h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="assign">Assign to pipeline (no invite)</SelectItem>
+                <SelectItem value="invite">Invite to apply only</SelectItem>
+                <SelectItem value="both">Assign + Invite</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="text-xs text-muted-foreground">Invites are tracked separately in the job’s Invites section.</div>
+          </div>
+
+          {action !== "invite" ? (
+            <div className="grid gap-2">
+              <Label>Stage</Label>
+              <Select value={stage} onValueChange={setStage}>
+                <SelectTrigger className="h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="applied">Applied</SelectItem>
+                  <SelectItem value="shortlist">Shortlist</SelectItem>
+                  <SelectItem value="screening">Screening</SelectItem>
+                  <SelectItem value="interview">Interview</SelectItem>
+                  <SelectItem value="offer">Offer</SelectItem>
+                  <SelectItem value="hired">Hired</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+
           <div className="grid gap-2">
             <Label htmlFor="notes">Notes (Optional)</Label>
             <Textarea
@@ -162,16 +186,6 @@ export function AssignJobDialog({ candidateId, open, onOpenChange, candidateName
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Add initial screening notes..."
             />
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              id="sendInvite"
-              type="checkbox"
-              checked={sendInvite}
-              onChange={(e) => setSendInvite(e.target.checked)}
-              className="h-4 w-4"
-            />
-            <Label htmlFor="sendInvite">Create invite link for this job</Label>
           </div>
         </div>
         <DialogFooter>

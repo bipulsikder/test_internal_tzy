@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Loader2 } from "lucide-react"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 
@@ -30,17 +31,33 @@ interface CreateJobDialogProps {
     title: string
     industry: string
     location: string
-    type: string
+    employment_type: string
+    shift_type: string
+    urgency_tag: string
+    city: string
+    salary_type: string
+    salary_min: number
+    salary_max: number
     description: string
-    requirements: string | string[]
-    salary_range: string
-    positions: number
     client_name: string
     client_id: string
-    amount: string
-    skills_required: string | string[]
-    experience: string
+    apply_type: string
+    external_apply_url: string
+    skills_must_have: string[]
+    skills_good_to_have: string[]
     sub_category: string
+    openings: number
+    education_min: string
+    experience_min_years: number
+    experience_max_years: number
+    languages_required: string[]
+    english_level: string
+    license_type: string
+    age_min: number
+    age_max: number
+    gender_preference: string
+    role_category: string
+    department_category: string
   }>
 }
 
@@ -54,24 +71,41 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
     industry: initialValues?.industry || "",
     sub_category: (initialValues as any)?.sub_category || "",
     location: initialValues?.location || "",
-    type: initialValues?.type || "Full-time",
+    employment_type: (initialValues as any)?.employment_type || "full_time",
+    shift_type: (initialValues as any)?.shift_type || "day",
+    urgency_tag: (initialValues as any)?.urgency_tag || "",
+    city: (initialValues as any)?.city || "",
+    salary_type: (initialValues as any)?.salary_type || "monthly",
+    salary_min: typeof (initialValues as any)?.salary_min === "number" ? (initialValues as any).salary_min : 0,
+    salary_max: typeof (initialValues as any)?.salary_max === "number" ? (initialValues as any).salary_max : 0,
     description: initialValues?.description || "",
-    requirements: Array.isArray(initialValues?.requirements) ? (initialValues?.requirements as string[]).join("\n") : (initialValues?.requirements as string) || "",
-    salary_range: initialValues?.salary_range || "",
-    positions: initialValues?.positions ?? 1,
+    openings: (initialValues as any)?.openings ?? 1,
     client_name: initialValues?.client_name || "",
     client_id: (initialValues as any)?.client_id || "",
-    amount: (initialValues as any)?.amount || "",
-    skills_required: Array.isArray((initialValues as any)?.skills_required)
-      ? ((initialValues as any).skills_required as string[]).join("\n")
-      : ((initialValues as any)?.skills_required as string) || "",
-    experience: initialValues?.experience || ""
+    apply_type: (initialValues as any)?.apply_type || "in_platform",
+    external_apply_url: (initialValues as any)?.external_apply_url || "",
+    skills_must_have: Array.isArray((initialValues as any)?.skills_must_have)
+      ? ((initialValues as any).skills_must_have as string[])
+        : [],
+    skills_good_to_have: Array.isArray((initialValues as any)?.skills_good_to_have) ? ((initialValues as any).skills_good_to_have as string[]) : [],
+    education_min: (initialValues as any)?.education_min || "",
+    experience_min_years: typeof (initialValues as any)?.experience_min_years === "number" ? (initialValues as any).experience_min_years : 0,
+    experience_max_years: typeof (initialValues as any)?.experience_max_years === "number" ? (initialValues as any).experience_max_years : 0,
+    languages_required: Array.isArray((initialValues as any)?.languages_required) ? ((initialValues as any).languages_required as string[]) : [],
+    english_level: (initialValues as any)?.english_level || "",
+    license_type: (initialValues as any)?.license_type || "",
+    age_min: typeof (initialValues as any)?.age_min === "number" ? (initialValues as any).age_min : 0,
+    age_max: typeof (initialValues as any)?.age_max === "number" ? (initialValues as any).age_max : 0,
+    gender_preference: (initialValues as any)?.gender_preference || "",
+    role_category: (initialValues as any)?.role_category || "",
+    department_category: (initialValues as any)?.department_category || "",
   })
   const [internalOpen, setInternalOpen] = useState(false)
   const [industryOpen, setIndustryOpen] = useState(false)
   const [generateHintOpen, setGenerateHintOpen] = useState(false)
   const [minRequirements, setMinRequirements] = useState("")
-  const [skillInput, setSkillInput] = useState("")
+  const [mustSkillInput, setMustSkillInput] = useState("")
+  const [goodSkillInput, setGoodSkillInput] = useState("")
 
   const BASE_SKILL_SUGGESTIONS = [
     "Dispatch",
@@ -109,63 +143,153 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
   }
 
   const SUB_CATEGORY_OPTIONS = [
-    "Car Carrier",
-    "Dry Van",
-    "Reefer",
-    "Flatbed",
-    "Tanker",
-    "LTL",
-    "Last Mile",
-    "Intermodal",
-    "Hazmat",
-    "Warehousing",
-    "Dispatch",
-    "Fleet Maintenance",
-    "Other"
+    { value: "driver_heavy_vehicle", label: "Driver – Heavy Vehicle" },
+    { value: "driver_light_commercial", label: "Driver – Light Commercial" },
+    { value: "dispatcher", label: "Dispatcher" },
+    { value: "warehouse_staff", label: "Warehouse Staff" },
+    { value: "fleet_manager", label: "Fleet Manager" },
+    { value: "operations_executive", label: "Operations Executive" },
   ]
 
-  const currentSkillTags = useMemo(() => {
-    return formData.skills_required
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean)
-  }, [formData.skills_required])
+  const LANGUAGE_OPTIONS = ["Hindi", "English", "Regional"]
+  const ENGLISH_LEVEL_OPTIONS = [
+    { value: "no_english", label: "No English" },
+    { value: "basic", label: "Basic" },
+    { value: "thoda", label: "Thoda English" },
+    { value: "good", label: "Good English" },
+  ]
+  const EDUCATION_MIN_OPTIONS = [
+    { value: "no_formal", label: "No Formal Education" },
+    { value: "8th", label: "8th Pass" },
+    { value: "10th", label: "10th Pass" },
+    { value: "12th", label: "12th Pass" },
+    { value: "graduate", label: "Graduate" },
+  ]
+  const EXPERIENCE_TYPE_OPTIONS = [
+    { value: "fresher", label: "Fresher" },
+    { value: "experienced", label: "Experienced" },
+  ]
+  const EXPERIENCE_CATEGORY_OPTIONS = [
+    { value: "heavy_vehicle", label: "Heavy Vehicle" },
+    { value: "fleet_ops", label: "Fleet Ops" },
+    { value: "warehouse", label: "Warehouse" },
+    { value: "dispatch", label: "Dispatch" },
+  ]
+  const LICENSE_TYPE_OPTIONS = [
+    { value: "lmv", label: "LMV" },
+    { value: "hmv", label: "HMV" },
+    { value: "mcwg", label: "MCWG" },
+    { value: "not_required", label: "Not Required" },
+  ]
+  const CERT_OPTIONS = ["Forklift", "Safety Training", "GPS/TMS Knowledge"]
+  const GENDER_PREFERENCE_OPTIONS = [
+    { value: "any", label: "Any" },
+    { value: "male", label: "Male" },
+    { value: "female", label: "Female" },
+  ]
+  const ROLE_CATEGORY_OPTIONS = [
+    { value: "last_mile_delivery", label: "Last Mile Delivery" },
+    { value: "line_haul", label: "Line Haul" },
+    { value: "long_haul", label: "Long Haul" },
+    { value: "warehouse_operations", label: "Warehouse Operations" },
+    { value: "fleet_operations", label: "Fleet Operations" },
+  ]
+  const DEPARTMENT_CATEGORY_OPTIONS = [
+    { value: "operations", label: "Operations" },
+    { value: "fleet", label: "Fleet" },
+    { value: "dispatch", label: "Dispatch" },
+    { value: "warehouse", label: "Warehouse" },
+  ]
+  const WORK_TYPE_OPTIONS = [
+    { value: "on_road", label: "On-road" },
+    { value: "on_site", label: "On-site" },
+    { value: "hybrid", label: "Hybrid" },
+  ]
+  const REPORTING_TO_OPTIONS = [
+    { value: "supervisor", label: "Supervisor" },
+    { value: "fleet_manager", label: "Fleet Manager" },
+    { value: "operations_head", label: "Operations Head" },
+  ]
+  const WHY_JOIN_OPTIONS = ["Stable income", "Fixed route", "Overtime pay", "Growth opportunity"]
+  const BENEFIT_OPTIONS = ["PF / ESIC", "Fuel Allowance", "Incentives", "Accommodation", "Food"]
 
-  const filteredSkillSuggestions = useMemo(() => {
-    const q = skillInput.trim().toLowerCase()
+  const mustSkills = useMemo(() => {
+    return Array.from(new Set((formData.skills_must_have || []).map((s) => String(s || "").trim()).filter(Boolean)))
+  }, [formData.skills_must_have])
+
+  const goodSkills = useMemo(() => {
+    return Array.from(new Set((formData.skills_good_to_have || []).map((s) => String(s || "").trim()).filter(Boolean)))
+  }, [formData.skills_good_to_have])
+
+  const filteredMustSkillSuggestions = useMemo(() => {
+    const q = mustSkillInput.trim().toLowerCase()
     if (!q) return []
-    const existing = new Set(currentSkillTags.map((s) => s.toLowerCase()))
+    const existing = new Set(mustSkills.map((s) => s.toLowerCase()))
     const dynamic = [
       ...(SKILL_SUGGESTIONS_BY_SUBCATEGORY[formData.sub_category] || []),
       ...BASE_SKILL_SUGGESTIONS
     ]
     const unique = Array.from(new Set(dynamic.map((s) => s.trim()).filter(Boolean)))
     return unique.filter((s) => s.toLowerCase().includes(q) && !existing.has(s.toLowerCase())).slice(0, 8)
-  }, [skillInput, currentSkillTags])
+  }, [mustSkillInput, mustSkills, formData.sub_category])
+
+  const filteredGoodSkillSuggestions = useMemo(() => {
+    const q = goodSkillInput.trim().toLowerCase()
+    if (!q) return []
+    const existing = new Set([...mustSkills, ...goodSkills].map((s) => s.toLowerCase()))
+    const dynamic = [
+      ...(SKILL_SUGGESTIONS_BY_SUBCATEGORY[formData.sub_category] || []),
+      ...BASE_SKILL_SUGGESTIONS
+    ]
+    const unique = Array.from(new Set(dynamic.map((s) => s.trim()).filter(Boolean)))
+    return unique.filter((s) => s.toLowerCase().includes(q) && !existing.has(s.toLowerCase())).slice(0, 8)
+  }, [goodSkillInput, mustSkills, goodSkills, formData.sub_category])
 
   const suggestedSkills = useMemo(() => {
-    const existing = new Set(currentSkillTags.map((s) => s.toLowerCase()))
+    const existing = new Set([...mustSkills, ...goodSkills].map((s) => s.toLowerCase()))
     const dynamic = [
       ...(SKILL_SUGGESTIONS_BY_SUBCATEGORY[formData.sub_category] || []),
       ...BASE_SKILL_SUGGESTIONS
     ]
     const unique = Array.from(new Set(dynamic.map((s) => s.trim()).filter(Boolean)))
     return unique.filter((s) => !existing.has(s.toLowerCase())).slice(0, 10)
-  }, [formData.sub_category, currentSkillTags])
+  }, [formData.sub_category, mustSkills, goodSkills])
 
-  const addSkillTag = (value: string) => {
+  const addMustSkill = (value: string) => {
     const v = value.trim()
     if (!v) return
-    const existing = new Set(currentSkillTags.map((s) => s.toLowerCase()))
+    const existing = new Set([...mustSkills, ...goodSkills].map((s) => s.toLowerCase()))
     if (existing.has(v.toLowerCase())) return
-    const next = [...currentSkillTags, v]
-    setFormData({ ...formData, skills_required: next.join("\n") })
-    setSkillInput("")
+    const next = [...mustSkills, v]
+    setFormData({ ...formData, skills_must_have: next })
+    setMustSkillInput("")
   }
 
-  const removeSkillTag = (value: string) => {
-    const next = currentSkillTags.filter((s) => s !== value)
-    setFormData({ ...formData, skills_required: next.join("\n") })
+  const addGoodSkill = (value: string) => {
+    const v = value.trim()
+    if (!v) return
+    const existing = new Set([...mustSkills, ...goodSkills].map((s) => s.toLowerCase()))
+    if (existing.has(v.toLowerCase())) return
+    const next = [...goodSkills, v]
+    setFormData({ ...formData, skills_good_to_have: next })
+    setGoodSkillInput("")
+  }
+
+  const removeMustSkill = (value: string) => {
+    const next = mustSkills.filter((s) => s !== value)
+    setFormData({ ...formData, skills_must_have: next })
+  }
+
+  const removeGoodSkill = (value: string) => {
+    const next = goodSkills.filter((s) => s !== value)
+    setFormData({ ...formData, skills_good_to_have: next })
+  }
+
+  const toggleLanguage = (value: string) => {
+    const current = Array.isArray(formData.languages_required) ? formData.languages_required : []
+    const exists = current.includes(value)
+    const next = exists ? current.filter((v) => v !== value) : [...current, value]
+    setFormData({ ...formData, languages_required: next })
   }
 
   // Handle controlled vs uncontrolled state
@@ -174,24 +298,38 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
 
   useEffect(() => {
     if (initialValues) {
-        setFormData({
-            title: initialValues.title || "",
-            industry: initialValues.industry || "",
-            sub_category: (initialValues as any)?.sub_category || "",
-            location: initialValues.location || "",
-            type: initialValues.type || "Full-time",
-            description: initialValues.description || "",
-            requirements: Array.isArray(initialValues.requirements) ? (initialValues.requirements as string[]).join("\n") : (initialValues.requirements as string) || "",
-            salary_range: initialValues.salary_range || "",
-            positions: initialValues.positions ?? 1,
-            client_name: initialValues.client_name || "",
-            client_id: (initialValues as any)?.client_id || "",
-            amount: (initialValues as any)?.amount || "",
-            skills_required: Array.isArray((initialValues as any)?.skills_required)
-              ? ((initialValues as any).skills_required as string[]).join("\n")
-              : ((initialValues as any)?.skills_required as string) || "",
-            experience: initialValues.experience || ""
-        })
+      setFormData({
+        title: initialValues.title || "",
+        industry: initialValues.industry || "",
+        sub_category: (initialValues as any)?.sub_category || "",
+        location: initialValues.location || "",
+        employment_type: (initialValues as any)?.employment_type || "full_time",
+        shift_type: (initialValues as any)?.shift_type || "day",
+        urgency_tag: (initialValues as any)?.urgency_tag || "",
+        city: (initialValues as any)?.city || "",
+        salary_type: (initialValues as any)?.salary_type || "monthly",
+        salary_min: typeof (initialValues as any)?.salary_min === "number" ? (initialValues as any).salary_min : 0,
+        salary_max: typeof (initialValues as any)?.salary_max === "number" ? (initialValues as any).salary_max : 0,
+        description: initialValues.description || "",
+        openings: (initialValues as any)?.openings ?? 1,
+        client_name: initialValues.client_name || "",
+        client_id: (initialValues as any)?.client_id || "",
+        apply_type: (initialValues as any)?.apply_type || "in_platform",
+        external_apply_url: (initialValues as any)?.external_apply_url || "",
+        skills_must_have: Array.isArray((initialValues as any)?.skills_must_have) ? ((initialValues as any).skills_must_have as string[]) : [],
+        skills_good_to_have: Array.isArray((initialValues as any)?.skills_good_to_have) ? ((initialValues as any).skills_good_to_have as string[]) : [],
+        education_min: (initialValues as any)?.education_min || "",
+        experience_min_years: typeof (initialValues as any)?.experience_min_years === "number" ? (initialValues as any).experience_min_years : 0,
+        experience_max_years: typeof (initialValues as any)?.experience_max_years === "number" ? (initialValues as any).experience_max_years : 0,
+        languages_required: Array.isArray((initialValues as any)?.languages_required) ? ((initialValues as any).languages_required as string[]) : [],
+        english_level: (initialValues as any)?.english_level || "",
+        license_type: (initialValues as any)?.license_type || "",
+        age_min: typeof (initialValues as any)?.age_min === "number" ? (initialValues as any).age_min : 0,
+        age_max: typeof (initialValues as any)?.age_max === "number" ? (initialValues as any).age_max : 0,
+        gender_preference: (initialValues as any)?.gender_preference || "",
+        role_category: (initialValues as any)?.role_category || "",
+        department_category: (initialValues as any)?.department_category || "",
+      })
     }
   }, [initialValues, isOpen])
 
@@ -207,14 +345,74 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (formData.apply_type === "external" && !String(formData.external_apply_url || "").trim()) {
+      toast({
+        title: "External URL required",
+        description: "Add the company apply link for external jobs.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setLoading(true)
 
     try {
+      const optional = (value: string) => {
+        const trimmed = value.trim()
+        return trimmed.length ? trimmed : null
+      }
+      const employmentTypeLabel =
+        formData.employment_type === "full_time"
+          ? "Full-time"
+          : formData.employment_type === "part_time"
+            ? "Part-time"
+            : formData.employment_type === "contract"
+              ? "Contract"
+              : "Full-time"
+
+      const sections = [
+        {
+          section_key: "about_role",
+          heading: "About the role",
+          body_md: String(formData.description || "").trim(),
+          sort_order: 0,
+          is_visible: true,
+        },
+      ].filter((s) => String(s.body_md || "").trim().length)
+
       const payload = {
-        ...formData,
-        requirements: formData.requirements.split("\n").filter((line) => line.trim() !== ""),
-        skills_required: currentSkillTags,
-        salary_range: null
+        title: formData.title,
+        client_name: optional(formData.client_name),
+        client_id: optional(formData.client_id),
+        apply_type: formData.apply_type === "external" ? "external" : "in_platform",
+        external_apply_url: formData.apply_type === "external" ? optional(formData.external_apply_url) : null,
+        industry: optional(formData.industry),
+        sub_category: optional(formData.sub_category),
+        location: formData.location,
+        city: optional(formData.city),
+        employment_type: optional(formData.employment_type) || "full_time",
+        shift_type: optional(formData.shift_type) || "day",
+        urgency_tag: optional(formData.urgency_tag),
+        openings: formData.openings,
+        salary_type: optional(formData.salary_type),
+        salary_min: formData.salary_min,
+        salary_max: formData.salary_max,
+        education_min: optional(formData.education_min),
+        experience_min_years: formData.experience_min_years,
+        experience_max_years: formData.experience_max_years,
+        languages_required: formData.languages_required,
+        english_level: optional(formData.english_level),
+        license_type: optional(formData.license_type),
+        age_min: formData.age_min,
+        age_max: formData.age_max,
+        gender_preference: optional(formData.gender_preference),
+        role_category: optional(formData.role_category),
+        department_category: optional(formData.department_category),
+        skills_must_have: mustSkills,
+        skills_good_to_have: goodSkills,
+        description: formData.description,
+        sections,
       }
 
       const url = jobId ? `/api/jobs/${jobId}` : "/api/jobs"
@@ -238,16 +436,32 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
         industry: "",
         sub_category: "",
         location: "",
-        type: "Full-time",
+        employment_type: "full_time",
+        shift_type: "day",
+        urgency_tag: "",
+        city: "",
+        salary_type: "monthly",
+        salary_min: 0,
+        salary_max: 0,
         description: "",
-        requirements: "",
-        salary_range: "",
-        positions: 1,
+        openings: 1,
         client_name: "",
         client_id: "",
-        amount: "",
-        skills_required: "",
-        experience: ""
+        apply_type: "in_platform",
+        external_apply_url: "",
+        skills_must_have: [],
+        skills_good_to_have: [],
+        education_min: "",
+        experience_min_years: 0,
+        experience_max_years: 0,
+        languages_required: [],
+        english_level: "",
+        license_type: "",
+        age_min: 0,
+        age_max: 0,
+        gender_preference: "",
+        role_category: "",
+        department_category: "",
       })
     } catch (error) {
       toast({
@@ -283,9 +497,8 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
             industry: formData.industry,
             subCategory: formData.sub_category,
             location: formData.location,
-            type: formData.type,
-            experienceLevel: formData.experience,
-            skillsRequired: currentSkillTags,
+            type: formData.employment_type,
+            skillsRequired: mustSkills,
             additionalRequirements: minRequirements
           }
         })
@@ -301,8 +514,6 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
       const formattedDescription = [
         jd?.description || "",
         responsibilities.length ? "\n### Key Responsibilities\n" + responsibilities.map((r: string) => `• ${r}`).join("\n") : "",
-        requirements.length ? "\n### Requirements\n" + requirements.map((r: string) => `• ${r}`).join("\n") : "",
-        skills.length ? "\n### Skills\n" + skills.map((r: string) => `• ${r}`).join("\n") : ""
       ]
         .filter((x) => typeof x === "string" && x.trim().length)
         .join("\n")
@@ -310,7 +521,7 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
       setFormData((prev) => ({
         ...prev,
         description: formattedDescription,
-        requirements: ""
+        skills_must_have: Array.from(new Set([...(prev.skills_must_have || []), ...skills.map((s: string) => String(s || "")).filter(Boolean)])),
       }))
 
       setGenerateHintOpen(false)
@@ -389,22 +600,22 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="sub_category">Sub category</Label>
+              <Label htmlFor="sub_category">Sub-category</Label>
               <Select value={formData.sub_category} onValueChange={(val) => setFormData({ ...formData, sub_category: val })}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select" />
                 </SelectTrigger>
                 <SelectContent>
                   {SUB_CATEGORY_OPTIONS.map((opt) => (
-                    <SelectItem key={opt} value={opt}>
-                      {opt}
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="location">Location</Label>
+              <Label htmlFor="location">Job location</Label>
               <Input
                 id="location"
                 value={formData.location}
@@ -413,29 +624,104 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
             </div>
           </div>
 
+          <div className="space-y-2">
+            <Label htmlFor="city">City (optional)</Label>
+            <Input id="city" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} />
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="type">Employment Type</Label>
-              <Select value={formData.type} onValueChange={(val) => setFormData({ ...formData, type: val })}>
+              <Label htmlFor="employment_type">Employment type</Label>
+              <Select value={formData.employment_type} onValueChange={(val) => setFormData({ ...formData, employment_type: val })}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Full-time">Full-time</SelectItem>
-                  <SelectItem value="Part-time">Part-time</SelectItem>
-                  <SelectItem value="Contract">Contract</SelectItem>
-                  <SelectItem value="Internship">Internship</SelectItem>
+                  <SelectItem value="full_time">Full-time</SelectItem>
+                  <SelectItem value="part_time">Part-time</SelectItem>
+                  <SelectItem value="contract">Contract</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="shift_type">Shift type</Label>
+              <Select value={formData.shift_type} onValueChange={(val) => setFormData({ ...formData, shift_type: val })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">Day</SelectItem>
+                  <SelectItem value="night">Night</SelectItem>
+                  <SelectItem value="rotational">Rotational</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="urgency_tag">Urgency tag</Label>
+              <Select
+                value={formData.urgency_tag ? formData.urgency_tag : "__none__"}
+                onValueChange={(val) => setFormData({ ...formData, urgency_tag: val === "__none__" ? "" : val })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  <SelectItem value="urgently_hiring">Urgently Hiring</SelectItem>
+                  <SelectItem value="immediate_joining">Immediate Joining</SelectItem>
+                  <SelectItem value="limited_openings">Limited Openings</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="positions">Number of Positions</Label>
+              <Label htmlFor="openings">Number of openings</Label>
               <Input
-                id="positions"
+                id="openings"
                 type="number"
                 min={1}
-                value={formData.positions}
-                onChange={(e) => setFormData({ ...formData, positions: parseInt(e.target.value || "1", 10) })}
+                value={formData.openings}
+                onChange={(e) => setFormData({ ...formData, openings: parseInt(e.target.value || "1", 10) })}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="salary_type">Salary type</Label>
+              <Select value={formData.salary_type} onValueChange={(val) => setFormData({ ...formData, salary_type: val })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="per_trip">Per Trip</SelectItem>
+                  <SelectItem value="hourly">Hourly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="salary_min">Min amount</Label>
+              <Input
+                id="salary_min"
+                type="number"
+                min={0}
+                value={formData.salary_min}
+                onChange={(e) => setFormData({ ...formData, salary_min: parseInt(e.target.value || "0", 10) })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="salary_max">Max amount</Label>
+              <Input
+                id="salary_max"
+                type="number"
+                min={0}
+                value={formData.salary_max}
+                onChange={(e) => setFormData({ ...formData, salary_max: parseInt(e.target.value || "0", 10) })}
               />
             </div>
           </div>
@@ -473,89 +759,272 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
                 </UiDialogContent>
               </UiDialog>
             </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="amount">Amount</Label>
+              <Label>Apply type</Label>
+              <Select value={formData.apply_type} onValueChange={(val) => setFormData({ ...formData, apply_type: val })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="in_platform">In-platform apply</SelectItem>
+                  <SelectItem value="external">External apply (company site)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>External apply URL</Label>
               <Input
-                id="amount"
-                placeholder="e.g. $35/hr or $90k/yr"
-                value={formData.amount}
-                onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                value={formData.external_apply_url}
+                disabled={formData.apply_type !== "external"}
+                placeholder={formData.apply_type === "external" ? "https://company.com/careers/job-id" : "Not required"}
+                onChange={(e) => setFormData({ ...formData, external_apply_url: e.target.value })}
               />
             </div>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="skills_required">Skills required</Label>
-              <div className="rounded-lg border p-3">
-                <div className="flex flex-wrap gap-2">
-                  {currentSkillTags.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => removeSkillTag(s)}
-                      className="rounded-full border bg-muted px-3 py-1 text-xs hover:bg-muted/70"
-                      title="Remove"
-                    >
-                      {s} ×
-                    </button>
-                  ))}
+            <Label>Skills (Must have)</Label>
+            <div className="rounded-lg border p-3">
+              <div className="flex flex-wrap gap-2">
+                {mustSkills.map((s) => (
+                  <button key={s} type="button" onClick={() => removeMustSkill(s)} className="rounded-full border bg-muted px-3 py-1 text-xs hover:bg-muted/70" title="Remove">
+                    {s} ×
+                  </button>
+                ))}
+              </div>
+              {suggestedSkills.length ? (
+                <div className="mt-3">
+                  <div className="text-xs font-medium text-muted-foreground">Suggested</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {suggestedSkills.map((s) => (
+                      <button key={s} type="button" onClick={() => addMustSkill(s)} className="rounded-full border bg-card px-3 py-1 text-xs hover:bg-accent">
+                        + {s}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                {suggestedSkills.length ? (
-                  <div className="mt-3">
-                    <div className="text-xs font-medium text-muted-foreground">Suggested</div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {suggestedSkills.map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          onClick={() => addSkillTag(s)}
-                          className="rounded-full border bg-card px-3 py-1 text-xs hover:bg-accent"
-                        >
-                          + {s}
-                        </button>
-                      ))}
-                    </div>
+              ) : null}
+              <div className="mt-3">
+                <Input
+                  value={mustSkillInput}
+                  onChange={(e) => setMustSkillInput(e.target.value)}
+                  placeholder="Type a skill and press Enter"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      addMustSkill(mustSkillInput)
+                    }
+                  }}
+                />
+                {filteredMustSkillSuggestions.length ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {filteredMustSkillSuggestions.map((s) => (
+                      <button key={s} type="button" onClick={() => addMustSkill(s)} className="rounded-full border bg-card px-3 py-1 text-xs hover:bg-accent">
+                        + {s}
+                      </button>
+                    ))}
                   </div>
                 ) : null}
-                <div className="mt-3">
-                  <Input
-                    id="skills_required"
-                    value={skillInput}
-                    onChange={(e) => setSkillInput(e.target.value)}
-                    placeholder="Type a skill and press Enter"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        addSkillTag(skillInput)
-                      }
-                    }}
-                  />
-                  {filteredSkillSuggestions.length ? (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {filteredSkillSuggestions.map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          onClick={() => addSkillTag(s)}
-                          className="rounded-full border bg-card px-3 py-1 text-xs hover:bg-accent"
-                        >
-                          + {s}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
               </div>
+            </div>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="experience">Experience</Label>
-            <Input
-              id="experience"
-              placeholder="e.g. 3-5 years, Senior, Fresher"
-              value={formData.experience}
-              onChange={(e) => setFormData({ ...formData, experience: e.target.value })}
-            />
+            <Label>Skills (Good to have)</Label>
+            <div className="rounded-lg border p-3">
+              <div className="flex flex-wrap gap-2">
+                {goodSkills.map((s) => (
+                  <button key={s} type="button" onClick={() => removeGoodSkill(s)} className="rounded-full border bg-muted px-3 py-1 text-xs hover:bg-muted/70" title="Remove">
+                    {s} ×
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3">
+                <Input
+                  value={goodSkillInput}
+                  onChange={(e) => setGoodSkillInput(e.target.value)}
+                  placeholder="Type a skill and press Enter"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      addGoodSkill(goodSkillInput)
+                    }
+                  }}
+                />
+                {filteredGoodSkillSuggestions.length ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {filteredGoodSkillSuggestions.map((s) => (
+                      <button key={s} type="button" onClick={() => addGoodSkill(s)} className="rounded-full border bg-card px-3 py-1 text-xs hover:bg-accent">
+                        + {s}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-muted/30 p-4">
+            <div className="text-sm font-semibold">Requirements matrix</div>
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Minimum education</Label>
+                <Select
+                  value={formData.education_min ? formData.education_min : "__none__"}
+                  onValueChange={(val) => setFormData({ ...formData, education_min: val === "__none__" ? "" : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {EDUCATION_MIN_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Experience range (years)</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  <Input type="number" min={0} value={formData.experience_min_years} onChange={(e) => setFormData({ ...formData, experience_min_years: parseInt(e.target.value || "0", 10) })} />
+                  <Input type="number" min={0} value={formData.experience_max_years} onChange={(e) => setFormData({ ...formData, experience_max_years: parseInt(e.target.value || "0", 10) })} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Languages required</Label>
+                <div className="grid grid-cols-2 gap-2 rounded-lg border bg-card p-3">
+                  {LANGUAGE_OPTIONS.map((l) => {
+                    const checked = formData.languages_required.includes(l)
+                    return (
+                      <label key={l} className="flex items-center gap-2 text-sm">
+                        <Checkbox checked={checked} onCheckedChange={() => toggleLanguage(l)} />
+                        <span>{l}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>English level</Label>
+                <Select
+                  value={formData.english_level ? formData.english_level : "__none__"}
+                  onValueChange={(val) => setFormData({ ...formData, english_level: val === "__none__" ? "" : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {ENGLISH_LEVEL_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>License type</Label>
+                <Select
+                  value={formData.license_type ? formData.license_type : "__none__"}
+                  onValueChange={(val) => setFormData({ ...formData, license_type: val === "__none__" ? "" : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {LICENSE_TYPE_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Age range</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  <Input type="number" min={0} value={formData.age_min} onChange={(e) => setFormData({ ...formData, age_min: parseInt(e.target.value || "0", 10) })} />
+                  <Input type="number" min={0} value={formData.age_max} onChange={(e) => setFormData({ ...formData, age_max: parseInt(e.target.value || "0", 10) })} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Gender preference</Label>
+                <Select
+                  value={formData.gender_preference ? formData.gender_preference : "__none__"}
+                  onValueChange={(val) => setFormData({ ...formData, gender_preference: val === "__none__" ? "" : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {GENDER_PREFERENCE_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-muted/30 p-4">
+            <div className="text-sm font-semibold">Job classification</div>
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Role category</Label>
+                <Select
+                  value={formData.role_category ? formData.role_category : "__none__"}
+                  onValueChange={(val) => setFormData({ ...formData, role_category: val === "__none__" ? "" : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {ROLE_CATEGORY_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Department</Label>
+                <Select
+                  value={formData.department_category ? formData.department_category : "__none__"}
+                  onValueChange={(val) => setFormData({ ...formData, department_category: val === "__none__" ? "" : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {DEPARTMENT_CATEGORY_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -574,18 +1043,13 @@ export function CreateJobDialog({ onJobCreated, open, onOpenChange, trigger, job
               placeholder="Job description will appear here..."
             />
           </div>
-
-          {/* Requirements input removed as requested - handled by AI generation and stored in description or separate field hidden from manual simple input if needed, 
-              but for now we'll keep the state but remove the UI input, merging it into description or handling it via AI response */}
-
-
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setIsOpen(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={loading}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Job
+              {jobId ? "Update Job" : "Create Job"}
             </Button>
           </DialogFooter>
         </form>

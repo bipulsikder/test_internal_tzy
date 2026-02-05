@@ -88,6 +88,14 @@ export async function parseResume(file: any): Promise<ComprehensiveCandidateData
 
     const extractedText = await extractTextFromFile(file)
 
+    const assessment = await assessResumeDocument(extractedText)
+    if (!assessment.isResume) {
+      const err: any = new Error(assessment.reason)
+      err.code = "NOT_RESUME"
+      err.assessment = assessment
+      throw err
+    }
+
     let geminiUnavailableReason: string | null = null
 
     // Try Gemini parsing
@@ -140,6 +148,121 @@ export async function parseResume(file: any): Promise<ComprehensiveCandidateData
     const msg = error instanceof Error ? error.message : String(error)
     console.error(`❌ Resume parsing completely failed: ${msg}`)
     throw error
+  }
+}
+
+async function assessResumeDocument(text: string): Promise<{ isResume: boolean; reason: string; confidence: number; docType: string }> {
+  const raw = String(text || "")
+  const t = raw.trim()
+  if (!t || t.length < 50) {
+    return {
+      isResume: false,
+      docType: "unreadable",
+      confidence: 0.9,
+      reason: "No readable resume text found. The file may be scanned, corrupted, or not a resume.",
+    }
+  }
+
+  if (looksLikePdfStructure(t)) {
+    return {
+      isResume: false,
+      docType: "pdf_binary_or_corrupt",
+      confidence: 0.95,
+      reason: "The extracted content looks like raw PDF structure (not human-readable). Please upload a valid resume PDF/DOCX.",
+    }
+  }
+
+  const lower = t.toLowerCase()
+  const emailRe = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
+  const phoneRe = /(\+?\d[\d\s\-()]{7,})/
+  const yearRe = /\b(19\d{2}|20\d{2})\b/
+
+  const positiveSignals: Array<[string, number, (s: string) => boolean]> = [
+    ["email", 3, (s) => emailRe.test(s)],
+    ["phone", 2, (s) => phoneRe.test(s)],
+    ["linkedin", 1, (s) => s.includes("linkedin.com")],
+    ["education", 2, (s) => /\beducation\b|\bqualification\b|\bdegree\b/i.test(s)],
+    ["experience", 2, (s) => /\bexperience\b|\bemployment\b|\bwork history\b/i.test(s)],
+    ["skills", 2, (s) => /\bskills\b|\btechnical skills\b|\bcore skills\b/i.test(s)],
+    ["projects", 1, (s) => /\bprojects?\b|\bportfolio\b/i.test(s)],
+    ["years", 1, (s) => yearRe.test(s)],
+  ]
+
+  const negativeSignals: Array<[string, number, (s: string) => boolean]> = [
+    ["invoice", 4, (s) => /\binvoice\b|\btax invoice\b|\binvoice no\b/i.test(s)],
+    ["receipt", 4, (s) => /\breceipt\b|\bpayment\b|\bpaid\b/i.test(s)],
+    ["bank", 4, (s) => /\bbank statement\b|\baccount number\b|\bifsc\b/i.test(s)],
+    ["shipping", 3, (s) => /\bawb\b|\btracking\b|\bshipping\b|\bconsignment\b/i.test(s)],
+    ["legal", 3, (s) => /\bagreement\b|\bcontract\b|\bterms and conditions\b/i.test(s)],
+  ]
+
+  let score = 0
+  let negHit: string | null = null
+  for (const [name, w, fn] of positiveSignals) {
+    if (fn(lower)) score += w
+  }
+  for (const [name, w, fn] of negativeSignals) {
+    if (fn(lower)) {
+      score -= w
+      if (!negHit) negHit = name
+    }
+  }
+
+  if (score >= 4) {
+    return { isResume: true, docType: "resume", confidence: 0.8, reason: "Looks like a resume." }
+  }
+
+  if (score <= -3) {
+    return {
+      isResume: false,
+      docType: negHit ? `non_resume_${negHit}` : "non_resume",
+      confidence: 0.85,
+      reason: negHit
+        ? `This file looks like a ${negHit} rather than a resume.`
+        : "This file does not look like a resume.",
+    }
+  }
+
+  if (!genAI) {
+    return {
+      isResume: false,
+      docType: "unknown",
+      confidence: 0.6,
+      reason: "Unable to confirm this file is a resume. Please upload a resume PDF/DOCX with clear sections (skills/experience/education).",
+    }
+  }
+
+  const modelName = process.env.GEMINI_CLASSIFIER_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash"
+  const model = genAI.getGenerativeModel({ model: modelName })
+  const limited = t.slice(0, 6000)
+  const prompt = `Classify the following document text.
+
+Return ONLY valid JSON with keys:
+- is_resume (boolean)
+- document_type (string, e.g. resume, invoice, receipt, bank_statement, offer_letter, unknown)
+- confidence (number 0-1)
+- reason (string, short)
+
+Document text:
+${limited}`
+
+  try {
+    const result: any = await runGeminiCall(() => model.generateContent(prompt), { minSpacingMs: 900, maxAttempts: 4 })
+    const content = result.response.text()
+    const match = content.match(/\{[\s\S]*\}/)
+    const parsed = match ? JSON.parse(match[0]) : null
+    const isResume = Boolean(parsed?.is_resume)
+    const docType = String(parsed?.document_type || "unknown")
+    const conf = Math.max(0, Math.min(1, Number(parsed?.confidence ?? 0.5)))
+    const reason = String(parsed?.reason || (isResume ? "Looks like a resume." : "Does not look like a resume."))
+    return { isResume, docType, confidence: conf, reason }
+  } catch {
+    return {
+      isResume: false,
+      docType: "unknown",
+      confidence: 0.6,
+      reason: "Unable to confirm this file is a resume. Please upload a resume PDF/DOCX with clear sections (skills/experience/education).",
+    }
   }
 }
 

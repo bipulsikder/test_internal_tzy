@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Eye, RefreshCw, User, MapPin, Briefcase, CheckCircle, Clock } from "lucide-react"
+import { Eye, RefreshCw, User, MapPin, Briefcase, CheckCircle, Clock, Sparkles, Loader2 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import dynamic from "next/dynamic"
 
@@ -28,6 +28,8 @@ export function JobMatchesTab({ jobId, onShortlist }: JobMatchesTabProps) {
   const [page, setPage] = useState(1)
   const [perPage, setPerPage] = useState(20)
   const [total, setTotal] = useState(0)
+  const [aiByCandidateId, setAiByCandidateId] = useState<Record<string, { summary: string; expanded: boolean; visible: boolean }>>({})
+  const [aiLoadingByCandidateId, setAiLoadingByCandidateId] = useState<Record<string, true>>({})
 
   useEffect(() => {
     fetchMatches()
@@ -103,6 +105,41 @@ export function JobMatchesTab({ jobId, onShortlist }: JobMatchesTabProps) {
     setIsPreviewOpen(true)
   }
 
+  const toggleAi = async (candidateId: string) => {
+    if (!candidateId) return
+    const existing = aiByCandidateId[candidateId]
+    if (existing?.summary) {
+      setAiByCandidateId((prev) => ({
+        ...prev,
+        [candidateId]: { ...prev[candidateId], visible: !prev[candidateId].visible }
+      }))
+      return
+    }
+
+    setAiLoadingByCandidateId((prev) => ({ ...prev, [candidateId]: true }))
+    try {
+      const res = await fetch("/api/matches/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, candidateId })
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to generate analysis")
+      setAiByCandidateId((prev) => ({
+        ...prev,
+        [candidateId]: { summary: String(data?.summary || ""), expanded: false, visible: true }
+      }))
+    } catch (e: any) {
+      toast({ title: "AI analysis failed", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setAiLoadingByCandidateId((prev) => {
+        const next = { ...prev }
+        delete next[candidateId]
+        return next
+      })
+    }
+  }
+
   const getRelevanceColor = (score: number) => {
     if (score >= 0.8) return "bg-green-100 text-green-800 border-green-200"
     if (score >= 0.6) return "bg-yellow-100 text-yellow-800 border-yellow-200"
@@ -154,6 +191,15 @@ export function JobMatchesTab({ jobId, onShortlist }: JobMatchesTabProps) {
                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => openPreview(match)}>
                             <Eye className="h-4 w-4 text-gray-500" />
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          disabled={!!aiLoadingByCandidateId[match.candidate_id]}
+                          onClick={() => toggleAi(match.candidate_id)}
+                        >
+                          {aiLoadingByCandidateId[match.candidate_id] ? <Loader2 className="h-4 w-4 animate-spin text-purple-600" /> : <Sparkles className="h-4 w-4 text-purple-600" />}
+                        </Button>
                         <Button size="sm" onClick={() => shortlist(match.candidate_id, match.relevance_score || 0)} className="h-8 text-xs">
                             <CheckCircle className="h-3 w-3 mr-1" />
                             Shortlist
@@ -175,6 +221,36 @@ export function JobMatchesTab({ jobId, onShortlist }: JobMatchesTabProps) {
                         <span className="truncate">{match.candidate?.total_experience || "No experience"}</span>
                     </div>
                   </div>
+
+                  {aiByCandidateId[match.candidate_id]?.summary && aiByCandidateId[match.candidate_id]?.visible ? (
+                    <div className="mt-3 rounded-lg border bg-purple-50/40 p-3">
+                      <div className="text-xs font-semibold text-purple-700 mb-1">AI Analysis</div>
+                      <div className="text-sm text-gray-700 whitespace-pre-wrap">
+                        {aiByCandidateId[match.candidate_id].expanded
+                          ? aiByCandidateId[match.candidate_id].summary
+                          : aiByCandidateId[match.candidate_id].summary.length > 260
+                            ? aiByCandidateId[match.candidate_id].summary.slice(0, 260) + "…"
+                            : aiByCandidateId[match.candidate_id].summary}
+                      </div>
+                      {aiByCandidateId[match.candidate_id].summary.length > 260 ? (
+                        <div className="mt-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() =>
+                              setAiByCandidateId((prev) => ({
+                                ...prev,
+                                [match.candidate_id]: { ...prev[match.candidate_id], expanded: !prev[match.candidate_id].expanded }
+                              }))
+                            }
+                          >
+                            {aiByCandidateId[match.candidate_id].expanded ? "View less" : "View more"}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </CardContent>
             </Card>

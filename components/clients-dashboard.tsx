@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -10,7 +10,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
-import { Building2, Plus, Upload, Trash2 } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Building2, MoreHorizontal, Plus, Trash2, Upload } from "lucide-react"
 
 type Client = {
   id: string
@@ -64,6 +66,7 @@ function slugify(value: string) {
 export function ClientsDashboard() {
   const { toast } = useToast()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
@@ -72,6 +75,8 @@ export function ClientsDashboard() {
   const [editing, setEditing] = useState<Client | null>(null)
   const [saving, setSaving] = useState(false)
   const [aboutBusy, setAboutBusy] = useState(false)
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState<string>("")
 
   const [form, setForm] = useState({
     name: "",
@@ -103,6 +108,24 @@ export function ClientsDashboard() {
     fetchClients()
   }, [])
 
+  useEffect(() => {
+    const editId = searchParams.get("edit")
+    const shouldNew = searchParams.get("new")
+    if (!clients.length) return
+    if (editId) {
+      const found = clients.find((c) => c.id === editId) || null
+      if (found) {
+        openEdit(found)
+        router.replace("/clients")
+      }
+      return
+    }
+    if (shouldNew) {
+      openNew()
+      router.replace("/clients")
+    }
+  }, [clients, router, searchParams])
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return clients
@@ -111,6 +134,8 @@ export function ClientsDashboard() {
 
   const openNew = () => {
     setEditing(null)
+    setLogoFile(null)
+    setLogoPreviewUrl("")
     setForm({
       name: "",
       slug: "",
@@ -129,6 +154,8 @@ export function ClientsDashboard() {
 
   const openEdit = (c: Client) => {
     setEditing(c)
+    setLogoFile(null)
+    setLogoPreviewUrl("")
     setForm({
       name: c.name || "",
       slug: c.slug || "",
@@ -211,6 +238,11 @@ export function ClientsDashboard() {
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error(data?.error || "Failed to save client")
 
+      const clientId = String(data?.id || editing?.id || "").trim()
+      if (logoFile && clientId) {
+        await uploadLogo(clientId, logoFile)
+      }
+
       toast({ title: "Saved", description: editing ? "Client updated." : "Client created." })
       setDialogOpen(false)
       await fetchClients()
@@ -220,6 +252,16 @@ export function ClientsDashboard() {
       setSaving(false)
     }
   }
+
+  useEffect(() => {
+    if (!logoFile) {
+      setLogoPreviewUrl("")
+      return
+    }
+    const url = URL.createObjectURL(logoFile)
+    setLogoPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [logoFile])
 
   const uploadLogo = async (clientId: string, file: File) => {
     try {
@@ -276,17 +318,17 @@ export function ClientsDashboard() {
           {filtered.map((c) => (
             <Card
               key={c.id}
-              className="cursor-pointer hover:shadow-sm transition-shadow"
+              className="cursor-pointer border-zinc-200 hover:border-zinc-300 hover:shadow-sm transition"
               onClick={() => router.push(`/clients/${c.id}`)}
             >
-              <CardHeader className="pb-2">
+              <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     {c.logo_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={c.logo_url} alt={c.name} className="h-10 w-10 rounded-lg border object-cover bg-white" />
+                      <img src={c.logo_url} alt={c.name} className="h-10 w-10 rounded-xl border bg-white object-contain p-1" />
                     ) : (
-                      <div className="h-10 w-10 rounded-lg border bg-gray-50 flex items-center justify-center">
+                      <div className="h-10 w-10 rounded-xl border bg-gray-50 flex items-center justify-center">
                         <Building2 className="h-5 w-5 text-muted-foreground" />
                       </div>
                     )}
@@ -295,32 +337,62 @@ export function ClientsDashboard() {
                       <div className="text-xs text-muted-foreground truncate">/{c.slug}</div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <label className="inline-flex cursor-pointer" title="Upload logo">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0]
-                          if (f) uploadLogo(c.id, f)
-                        }}
-                      />
-                      <Button variant="outline" size="icon">
-                        <Upload className="h-4 w-4" />
+                  <input
+                    id={`client-logo-upload-${c.id}`}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      const f = e.currentTarget.files?.[0]
+                      e.currentTarget.value = ""
+                      if (f) uploadLogo(c.id, f)
+                    }}
+                  />
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
                       </Button>
-                    </label>
-                    <Button variant="outline" size="icon" onClick={(e) => { e.stopPropagation(); openEdit(c) }}>Edit</Button>
-                    <Button variant="destructive" size="icon" onClick={() => removeClient(c.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenuItem onClick={() => openEdit(c)}>Edit</DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const el = document.getElementById(`client-logo-upload-${c.id}`) as HTMLInputElement | null
+                          el?.click()
+                        }}
+                      >
+                        <Upload className="mr-2 h-4 w-4" /> Upload logo
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-red-600 focus:text-red-600"
+                        onClick={() => removeClient(c.id)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" /> Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="text-sm text-muted-foreground line-clamp-2">{c.about || "No about added yet."}</div>
-                <div className="text-xs text-muted-foreground">
-                  {(c.location || "") + (c.company_type ? ` • ${c.company_type}` : "")}
+              <CardContent className="space-y-3">
+                <div className="text-sm text-muted-foreground line-clamp-3">{c.about || "No about added yet."}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {c.location ? <Badge variant="outline">{c.location}</Badge> : null}
+                  {c.company_type ? <Badge variant="secondary">{c.company_type}</Badge> : null}
+                  {c.website ? (
+                    <Badge variant="outline" className="max-w-full truncate">
+                      {String(c.website).replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                    </Badge>
+                  ) : null}
                 </div>
               </CardContent>
             </Card>
@@ -337,6 +409,45 @@ export function ClientsDashboard() {
           </DialogHeader>
 
           <div className="grid gap-4">
+            <div className="rounded-xl border bg-white p-4 dark:bg-zinc-900 dark:border-zinc-800">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  {logoPreviewUrl || editing?.logo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={logoPreviewUrl || String(editing?.logo_url || "")} alt="Logo" className="h-12 w-12 rounded-xl border bg-white object-cover" />
+                  ) : (
+                    <div className="h-12 w-12 rounded-xl border bg-gray-50" />
+                  )}
+                  <div>
+                    <div className="text-sm font-semibold">Company logo</div>
+                    <div className="text-xs text-muted-foreground">PNG/JPG recommended.</div>
+                  </div>
+                </div>
+                <input
+                  id="client-logo-file"
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml,image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.currentTarget.files?.[0] || null
+                    e.currentTarget.value = ""
+                    setLogoFile(f)
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const el = document.getElementById("client-logo-file") as HTMLInputElement | null
+                    el?.click()
+                  }}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {editing ? "Upload logo" : "Choose logo"}
+                </Button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Name *</Label>

@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { supabaseAdmin } from "@/lib/supabase"
+import { normalizeExternalUrl } from "@/lib/utils"
 
 export const runtime = "nodejs"
 export const revalidate = 0
@@ -37,9 +38,17 @@ export default async function ClientDetailPage(props: { params: Promise<{ id: st
         <Link href="/clients" className="text-sm text-muted-foreground hover:text-foreground">
           ← Back to clients
         </Link>
-        <Link href="/jobs" className="text-sm text-muted-foreground hover:text-foreground">
-          Jobs
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href={`/clients?edit=${client.id}`}
+            className="rounded-full border bg-white px-4 py-2 text-sm hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-800"
+          >
+            Edit client
+          </Link>
+          <Link href="/jobs" className="text-sm text-muted-foreground hover:text-foreground">
+            Jobs
+          </Link>
+        </div>
       </div>
 
       <div className="rounded-2xl border bg-white p-8 shadow-sm dark:bg-zinc-900 dark:border-zinc-800">
@@ -60,7 +69,12 @@ export default async function ClientDetailPage(props: { params: Promise<{ id: st
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="rounded-xl border bg-white p-4 dark:bg-zinc-900 dark:border-zinc-800">
               <div className="text-xs font-medium text-muted-foreground">Website</div>
-              <a href={client.website} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block text-sm font-medium text-blue-600 hover:underline">
+              <a
+                href={normalizeExternalUrl(client.website)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-sm font-medium text-blue-600 hover:underline"
+              >
                 {client.website}
               </a>
               <div className="mt-2 text-sm">{client.company_type || "—"}</div>
@@ -148,4 +162,3 @@ export default async function ClientDetailPage(props: { params: Promise<{ id: st
     </div>
   )
 }
-

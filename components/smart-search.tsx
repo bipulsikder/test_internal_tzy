@@ -39,8 +39,10 @@ import {
   Languages,
   ChevronLeft,
   ChevronRight,
+  Loader2,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { AssignJobDialog } from "./assign-job-dialog"
 const CandidatePreviewDialogDynamic = dynamic(() => import("./candidate-preview-dialog").then(m => m.CandidatePreviewDialog), {
   ssr: false,
 })
@@ -94,6 +96,7 @@ interface SearchResult {
   }
   matchSummary?: string
   gapAnalysis?: string[]
+  education?: string
 }
 
 interface MinimalSearchFilters {
@@ -198,6 +201,13 @@ export function SmartSearch() {
   // Cache for search results to improve pagination performance
   const [resultsCache, setResultsCache] = useState<Record<string, { items: SearchResult[], total: number, serverPaginated: boolean }>>({})
 
+  const [aiInsightsById, setAiInsightsById] = useState<Record<string, { summary: string; expanded: boolean; visible: boolean }>>({})
+  const [aiInsightLoadingById, setAiInsightLoadingById] = useState<Record<string, boolean>>({})
+
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignCandidateId, setAssignCandidateId] = useState<string>("")
+  const [assignCandidateName, setAssignCandidateName] = useState<string>("")
+
   const { toast } = useToast()
 
   useEffect(() => {
@@ -288,6 +298,63 @@ export function SmartSearch() {
       setSearchResults([])
     } finally {
       setIsSearching(false)
+    }
+  }
+
+  const candidateKey = (r: SearchResult) => String(r._id || r.id || "").trim()
+
+  const openAssign = (result: SearchResult) => {
+    const id = candidateKey(result)
+    if (!id) {
+      toast({ title: "Cannot assign", description: "Missing candidate id", variant: "destructive" })
+      return
+    }
+    setAssignCandidateId(id)
+    setAssignCandidateName(result.name || "Candidate")
+    setAssignOpen(true)
+  }
+
+  const loadAiInsight = async (result: SearchResult) => {
+    const id = candidateKey(result)
+    if (!id) return
+
+    if (aiInsightsById[id]?.summary) {
+      setAiInsightsById((prev) => ({
+        ...prev,
+        [id]: { ...prev[id], visible: !prev[id].visible }
+      }))
+      return
+    }
+
+    const params = lastSearchParams || { type: searchMode }
+    const payload = {
+      candidateId: id,
+      type: params.type || searchMode,
+      query: params.query || smartSearchQuery,
+      jd: params.jd || jobDescription,
+    }
+
+    setAiInsightLoadingById((prev) => ({ ...prev, [id]: true }))
+    try {
+      const res = await fetch("/api/search/summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to generate insight")
+      setAiInsightsById((prev) => ({
+        ...prev,
+        [id]: { summary: String(data?.summary || ""), expanded: false, visible: true }
+      }))
+    } catch (e: any) {
+      toast({ title: "AI insight failed", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setAiInsightLoadingById((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
     }
   }
 
@@ -1653,6 +1720,32 @@ export function SmartSearch() {
                             }}>
                                 <Eye className="h-3 w-3 mr-1" /> View Profile
                             </Button>
+
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openAssign(result)
+                              }}
+                            >
+                              <Briefcase className="h-3 w-3 mr-1" /> Assign to Job
+                            </Button>
+
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                loadAiInsight(result)
+                              }}
+                              disabled={aiInsightLoadingById[candidateKey(result)]}
+                            >
+                              {aiInsightLoadingById[candidateKey(result)] ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Bot className="h-3 w-3 mr-1" />}
+                              AI Insight
+                            </Button>
                             {result.fileUrl && (
                                 <Button variant="ghost" size="sm" className="h-7 text-xs text-gray-500" asChild onClick={(e) => e.stopPropagation()}>
                                     <a href={result.fileUrl} target="_blank" rel="noopener noreferrer">
@@ -1663,30 +1756,53 @@ export function SmartSearch() {
                         </div>
                       </div>
 
-                      {/* AI Match Analysis (Compact) */}
-                      {((result.matchDetails && result.matchDetails.length > 0) || result.matchSummary) && (
-                        <div className="mt-2 pt-2 border-t border-gray-100 bg-gray-50/30 p-2 rounded">
-                          
-                          {/* AI Insight Summary */}
-                          {result.matchSummary && (
-                              <div className="mb-2 text-xs text-gray-700 bg-purple-50/50 p-2 rounded border border-purple-100">
-                                  <span className="font-bold text-purple-700 mr-1">AI Insight:</span>
-                                  {result.matchSummary}
-                              </div>
-                          )}
 
-                          {/* Score Bars (Compact) */}
+                      {/* AI Match Analysis (Compact) */}
+                      {aiInsightsById[candidateKey(result)]?.visible === false ? null : (
+                        <div className="mt-2 pt-2 border-t border-gray-100 bg-gray-50/30 p-2 rounded">
+                          <div className="mb-2 text-xs text-gray-700 bg-purple-50/50 p-2 rounded border border-purple-100">
+                            <span className="font-bold text-purple-700 mr-1">AI Insight:</span>
+                            {aiInsightsById[candidateKey(result)]?.summary ? (
+                              <>
+                                {aiInsightsById[candidateKey(result)]?.expanded
+                                  ? aiInsightsById[candidateKey(result)]?.summary
+                                  : (aiInsightsById[candidateKey(result)]?.summary || "").length > 260
+                                    ? (aiInsightsById[candidateKey(result)]?.summary || "").slice(0, 260) + "…"
+                                    : aiInsightsById[candidateKey(result)]?.summary}
+                                {(aiInsightsById[candidateKey(result)]?.summary || "").length > 260 ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 px-2 text-xs ml-2"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      const id = candidateKey(result)
+                                      setAiInsightsById((prev) => ({
+                                        ...prev,
+                                        [id]: { ...prev[id], expanded: !prev[id].expanded }
+                                      }))
+                                    }}
+                                  >
+                                    {aiInsightsById[candidateKey(result)]?.expanded ? "View less" : "View more"}
+                                  </Button>
+                                ) : null}
+                              </>
+                            ) : (
+                              <span className="text-gray-500 italic">Click “AI Insight” to generate.</span>
+                            )}
+                          </div>
+
                           {result.scoreBreakdown && (
                             <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
                               {Object.entries(result.scoreBreakdown).map(([key, data]) => (
                                 <div key={key} className="flex items-center text-[10px] w-[140px]">
                                   <span className="w-16 font-medium text-gray-500 truncate">{key}</span>
                                   <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden mx-1">
-                                    <div 
+                                    <div
                                       className={`h-full rounded-full ${
-                                        data.percentage > 80 ? 'bg-green-500' : 
+                                        data.percentage > 80 ? 'bg-green-500' :
                                         data.percentage > 40 ? 'bg-yellow-500' : 'bg-red-400'
-                                      }`} 
+                                      }`}
                                       style={{ width: `${data.percentage}%` }}
                                     />
                                   </div>
@@ -1696,7 +1812,6 @@ export function SmartSearch() {
                             </div>
                           )}
 
-                          {/* Key Matches & Gaps (Original Vertical Layout) */}
                           <div className="mt-2 space-y-2">
                             <div>
                               {result.matchDetails?.filter(d => d.status === 'match').length ? (
@@ -1785,6 +1900,13 @@ export function SmartSearch() {
             </CardContent>
           </Card>
         )}
+
+        <AssignJobDialog
+          candidateId={assignCandidateId}
+          candidateName={assignCandidateName}
+          open={assignOpen}
+          onOpenChange={setAssignOpen}
+        />
 
         {/* Candidate Preview Dialog */}
         <CandidatePreviewDialogDynamic

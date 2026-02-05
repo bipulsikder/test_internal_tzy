@@ -204,8 +204,51 @@ export async function POST(request: NextRequest) {
         console.log("✅ Resume parsing successful")
         console.log("Parsed data:", JSON.stringify(parsedData, null, 2))
       } catch (parseError) {
+        const code = (parseError as any)?.code
+        const msg = parseError instanceof Error ? parseError.message : String(parseError)
+
+        if (code === "NOT_RESUME") {
+          const assessment = (parseError as any)?.assessment
+          const reason = String(assessment?.reason || msg || "This file does not appear to be a resume")
+          const docType = String(assessment?.docType || "unknown")
+          const confidence = Number(assessment?.confidence ?? 0.6)
+
+          if (uploadLogId) {
+            await supabaseAdmin
+              .from('upload_logs')
+              .update({
+                status: 'completed',
+                result_type: 'blocked',
+                message: 'Blocked: not a resume',
+                error_code: 'NOT_RESUME',
+                error_message: reason,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', uploadLogId)
+          }
+
+          return NextResponse.json({
+            error: "This file does not look like a resume",
+            resultType: "blocked",
+            validationFailed: true,
+            blockedCategory: "not_resume",
+            details: reason,
+            docType,
+            confidence,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            suggestions: [
+              "Upload a resume/CV (not invoices, receipts, offer letters, or other documents)",
+              "If the PDF is scanned, upload a clearer PDF or a DOCX version",
+              "Make sure the resume includes contact info and sections like Skills/Experience/Education",
+            ],
+            timestamp: new Date().toISOString(),
+          }, { status: 422 })
+        }
+
         console.error("❌ Resume parsing failed:", parseError)
-        parsingError = parseError instanceof Error ? parseError.message : "Unknown parsing error"
+        parsingError = msg || "Unknown parsing error"
 
         if (uploadLogId) {
           await supabaseAdmin

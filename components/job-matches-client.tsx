@@ -8,6 +8,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { RefreshCw, User, CheckCircle, MapPin, Briefcase, Eye, Loader2, Sparkles } from "lucide-react"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
 
 const CandidatePreviewDialogDynamic = dynamic(() => import("./candidate-preview-dialog").then(m => m.CandidatePreviewDialog), {
   ssr: false,
@@ -23,6 +25,29 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
   const [refreshing, setRefreshing] = useState(false)
   const [selectedCandidate, setSelectedCandidate] = useState<any | null>(null)
   const [isPreviewLoading, setIsPreviewLoading] = useState(false)
+  const [existingAppsByCandidateId, setExistingAppsByCandidateId] = useState<Record<string, { id: string; status: string }>>({})
+  const [pendingCandidateIds, setPendingCandidateIds] = useState<Record<string, true>>({})
+
+  const [aiByCandidateId, setAiByCandidateId] = useState<Record<string, { summary: string; expanded: boolean; visible: boolean }>>({})
+  const [aiLoadingByCandidateId, setAiLoadingByCandidateId] = useState<Record<string, true>>({})
+
+  const [manageOpen, setManageOpen] = useState(false)
+  const [manageCandidateId, setManageCandidateId] = useState<string>("")
+  const [manageCandidate, setManageCandidate] = useState<any | null>(null)
+  const [manageScore, setManageScore] = useState<number>(0)
+  const [manageStage, setManageStage] = useState<string>("shortlist")
+  const [manageAction, setManageAction] = useState<"assign" | "invite" | "both">("assign")
+  const [manageBusy, setManageBusy] = useState<boolean>(false)
+
+  const STATUS_OPTIONS = [
+    { id: "applied", label: "Applied" },
+    { id: "shortlist", label: "Shortlist" },
+    { id: "screening", label: "Screening" },
+    { id: "interview", label: "Interview" },
+    { id: "offer", label: "Offer" },
+    { id: "hired", label: "Hired" },
+    { id: "rejected", label: "Rejected" }
+  ]
 
   const fetchMatches = async (opts?: { refresh?: boolean }) => {
     try {
@@ -45,6 +70,28 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, perPage])
 
+  const refreshExistingApps = async () => {
+    try {
+      const res = await fetch(`/api/applications?jobId=${jobId}`, { cache: "no-store" })
+      const rows = res.ok ? await res.json() : []
+      const next: Record<string, { id: string; status: string }> = {}
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const cid = String((row as any)?.candidate_id || "").trim()
+        const id = String((row as any)?.id || "").trim()
+        const status = String((row as any)?.status || "").trim()
+        if (cid && id) next[cid] = { id, status }
+      }
+      setExistingAppsByCandidateId(next)
+    } catch {
+      setExistingAppsByCandidateId({})
+    }
+  }
+
+  useEffect(() => {
+    refreshExistingApps()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId])
+
   const refreshMatches = async () => {
     try {
       setRefreshing(true)
@@ -56,27 +103,86 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
     }
   }
 
-  const shortlist = async (candidateId: string, score: number) => {
+  const openManage = (candidateId: string, candidate: any, score: number) => {
+    const existing = existingAppsByCandidateId[candidateId]
+    setManageCandidateId(candidateId)
+    setManageCandidate(candidate)
+    setManageScore(score)
+    setManageStage(existing?.status || "shortlist")
+    setManageAction("assign")
+    setManageOpen(true)
+  }
+
+  const saveManage = async () => {
+    if (!manageCandidateId) return
+    const candidateId = manageCandidateId
+    const existing = existingAppsByCandidateId[candidateId]
+    const targetStage = manageStage
+    const shouldAssign = manageAction !== "invite"
+    const shouldInvite = manageAction !== "assign"
+
+    setManageBusy(true)
+    setPendingCandidateIds((prev) => ({ ...prev, [candidateId]: true }))
     try {
-      const res = await fetch("/api/applications", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-            job_id: jobId, 
-            candidate_id: candidateId, 
-            source: "database", 
-            status: "shortlisted",
-            match_score: score
-        })
-      })
-      if (res.status === 409) {
-        toast({ title: "Already added", description: "Candidate already in applicants" })
-        return
+      if (shouldAssign) {
+        if (existing?.id) {
+          if (existing.status !== targetStage) {
+            const res = await fetch(`/api/applications/${existing.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: targetStage })
+            })
+            if (!res.ok) throw new Error("Failed to update stage")
+          }
+        } else {
+          const res = await fetch("/api/applications", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              job_id: jobId,
+              candidate_id: candidateId,
+              source: "database",
+              status: targetStage,
+              match_score: manageScore
+            })
+          })
+
+          if (res.status === 409) {
+            await refreshExistingApps()
+          } else if (!res.ok) {
+            throw new Error("Failed to assign candidate")
+          }
+        }
       }
-      if (!res.ok) throw new Error("Failed to shortlist")
-      toast({ title: "Shortlisted", description: "Candidate added to Shortlisted from DB" })
-    } catch (e) {
-      toast({ title: "Error", description: "Failed to shortlist candidate", variant: "destructive" })
+
+      if (shouldInvite) {
+        const res = await fetch("/api/job-invites", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId, candidateId, resend: true })
+        })
+        const data = await res.json().catch(() => null)
+        if (!res.ok) throw new Error(data?.error || "Failed to create/send invite")
+        if (shouldAssign) {
+          toast({ title: "Saved", description: data?.emailSent ? "Assigned and invite email sent." : "Assigned and invite link ready." })
+        } else {
+          toast({ title: "Invite created", description: data?.emailSent ? "Invite email sent." : "Invite link ready." })
+        }
+      } else if (shouldAssign) {
+        toast({ title: "Saved", description: "Candidate assigned successfully." })
+      }
+
+      await refreshExistingApps()
+      setManageOpen(false)
+    } catch (e: any) {
+      toast({ title: "Error", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setManageBusy(false)
+      setPendingCandidateIds((prev) => {
+        const next = { ...prev }
+        delete next[candidateId]
+        return next
+      })
     }
   }
 
@@ -122,6 +228,42 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
     return "bg-gray-400"
   }
 
+  const toggleAi = async (candidateId: string) => {
+    if (!candidateId) return
+
+    const existing = aiByCandidateId[candidateId]
+    if (existing?.summary) {
+      setAiByCandidateId((prev) => ({
+        ...prev,
+        [candidateId]: { ...prev[candidateId], visible: !prev[candidateId].visible }
+      }))
+      return
+    }
+
+    setAiLoadingByCandidateId((prev) => ({ ...prev, [candidateId]: true }))
+    try {
+      const res = await fetch("/api/matches/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, candidateId })
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || "Failed to generate analysis")
+      setAiByCandidateId((prev) => ({
+        ...prev,
+        [candidateId]: { summary: String(data?.summary || ""), expanded: false, visible: true }
+      }))
+    } catch (e: any) {
+      toast({ title: "AI analysis failed", description: e?.message || "Failed", variant: "destructive" })
+    } finally {
+      setAiLoadingByCandidateId((prev) => {
+        const next = { ...prev }
+        delete next[candidateId]
+        return next
+      })
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -157,6 +299,9 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
             const candidate = m.candidate || {}
             const score = m.relevance_score || 0
             const matchPercentage = Math.round(score * 100)
+            const isAdded = !!existingAppsByCandidateId[m.candidate_id]
+            const isPending = !!pendingCandidateIds[m.candidate_id]
+            const addedStage = existingAppsByCandidateId[m.candidate_id]?.status || ""
 
             return (
               <Card key={`${m.job_id}-${m.candidate_id}`} className="hover:shadow-md transition-all border-l-4 border-l-transparent hover:border-l-blue-500">
@@ -201,16 +346,64 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
                                     <Eye className="h-4 w-4 mr-2" />
                                     View
                                 </Button>
+
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8"
+                                  disabled={!!aiLoadingByCandidateId[m.candidate_id]}
+                                  onClick={() => toggleAi(m.candidate_id)}
+                                >
+                                  {aiLoadingByCandidateId[m.candidate_id] ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+                                  AI
+                                </Button>
                                 <Button 
                                     size="sm" 
                                     className="h-8 bg-blue-600 hover:bg-blue-700"
-                                    onClick={() => shortlist(m.candidate_id, score)}
+                                    onClick={() => openManage(m.candidate_id, candidate, score)}
+                                    disabled={isPending}
                                 >
-                                    <CheckCircle className="h-4 w-4 mr-2" />
-                                    Shortlist
+                                    {isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+                                    {isAdded ? "Manage" : "Associate"}
                                 </Button>
                             </div>
                         </div>
+
+                        {isAdded ? (
+                          <div className="mt-2 text-xs text-gray-500">
+                            In pipeline{addedStage ? ` • Stage: ${addedStage}` : ""}
+                          </div>
+                        ) : null}
+
+                        {aiByCandidateId[m.candidate_id]?.summary && aiByCandidateId[m.candidate_id]?.visible ? (
+                          <div className="mt-3 rounded-lg border bg-purple-50/40 p-3">
+                            <div className="text-xs font-semibold text-purple-700 mb-1">AI Analysis</div>
+                            <div className="text-sm text-gray-700 whitespace-pre-wrap">
+                              {aiByCandidateId[m.candidate_id].expanded
+                                ? aiByCandidateId[m.candidate_id].summary
+                                : aiByCandidateId[m.candidate_id].summary.length > 260
+                                  ? aiByCandidateId[m.candidate_id].summary.slice(0, 260) + "…"
+                                  : aiByCandidateId[m.candidate_id].summary}
+                            </div>
+                            {aiByCandidateId[m.candidate_id].summary.length > 260 ? (
+                              <div className="mt-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() =>
+                                    setAiByCandidateId((prev) => ({
+                                      ...prev,
+                                      [m.candidate_id]: { ...prev[m.candidate_id], expanded: !prev[m.candidate_id].expanded }
+                                    }))
+                                  }
+                                >
+                                  {aiByCandidateId[m.candidate_id].expanded ? "View less" : "View more"}
+                                </Button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
 
                         {/* AI Match Analysis (Compact) */}
                       {((m.matchDetails && m.matchDetails.length > 0) || m.match_summary || candidate.matchSummary) && (
@@ -324,6 +517,78 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
           showRelevanceScore={true}
         />
       )}
+
+      <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Associate candidate</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div>
+              <div className="text-sm font-medium">{manageCandidate?.name || "Candidate"}</div>
+              {manageCandidate?.email ? <div className="mt-1 text-sm text-gray-500">{manageCandidate.email}</div> : null}
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Action</Label>
+              <Select
+                value={manageAction}
+                onValueChange={(v) => setManageAction(v as any)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="assign">Assign to pipeline (no invite)</SelectItem>
+                  <SelectItem value="invite" disabled={!manageCandidate?.email}>Invite to apply only</SelectItem>
+                  <SelectItem value="both" disabled={!manageCandidate?.email}>Assign + Invite</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="text-xs text-gray-500">
+                Assigning controls pipeline stages. Invites are tracked separately in the Invites section.
+              </div>
+            </div>
+
+            {manageAction !== "invite" ? (
+              <div className="grid gap-2">
+                <Label>Stage</Label>
+                <Select value={manageStage} onValueChange={setManageStage}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_OPTIONS.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="text-xs text-gray-500">This controls where the candidate appears in your pipeline stages.</div>
+              </div>
+            ) : (
+              <div className="rounded-lg border bg-gray-50 p-3 text-xs text-gray-600">
+                Invite-only does not place the candidate into any pipeline stage.
+              </div>
+            )}
+
+            {manageAction !== "assign" ? (
+              <div className="rounded-lg border bg-blue-50 p-3 text-xs text-blue-700">
+                {manageCandidate?.email ? "A tracked invite link will be created (and emailed if SMTP is configured)." : "Candidate email missing — invite disabled."}
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setManageOpen(false)} disabled={manageBusy}>
+              Cancel
+            </Button>
+            <Button onClick={saveManage} disabled={manageBusy || !manageCandidateId}>
+              {manageBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

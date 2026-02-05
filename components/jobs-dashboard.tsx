@@ -11,30 +11,48 @@ import { CreateJobDialog } from "./create-job-dialog"
 import { formatDistanceToNow } from "date-fns"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { getBoardJobApplyUrl } from "@/lib/utils"
 
 interface Job {
   id: string
   title: string
-  department: string
   location: string
-  type: string
   status: string
   description: string
-  requirements: string[]
   created_at: string
-  positions?: number
+  apply_type?: string | null
+  external_apply_url?: string | null
   client_name?: string
   client_id?: string | null
-  amount?: string | null
-  skills_required?: string[] | null
-  experience?: string
+  industry?: string | null
+  employment_type?: string | null
+  shift_type?: string | null
+  city?: string | null
+  salary_type?: string | null
+  salary_min?: number | null
+  salary_max?: number | null
+  openings?: number | null
+  education_min?: string | null
+  experience_min_years?: number | null
+  experience_max_years?: number | null
+  languages_required?: string[] | null
+  english_level?: string | null
+  license_type?: string | null
+  age_min?: number | null
+  age_max?: number | null
+  gender_preference?: string | null
+  role_category?: string | null
+  department_category?: string | null
+  skills_must_have?: string[] | null
+  skills_good_to_have?: string[] | null
+  sub_category?: string | null
 }
 
 export function JobsDashboard() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [clients, setClients] = useState<{ id: string; name: string; slug: string }[]>([])
+  const [clients, setClients] = useState<{ id: string; name: string; slug: string; logo_url?: string | null }[]>([])
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [clientFilter, setClientFilter] = useState<string>("all")
   const [createOpen, setCreateOpen] = useState(false)
@@ -54,7 +72,7 @@ export function JobsDashboard() {
     try {
       const res = await fetch("/api/clients")
       const data = res.ok ? await res.json() : []
-      setClients(Array.isArray(data) ? data.map((c: any) => ({ id: c.id, name: c.name, slug: c.slug })) : [])
+      setClients(Array.isArray(data) ? data.map((c: any) => ({ id: c.id, name: c.name, slug: c.slug, logo_url: c.logo_url })) : [])
     } catch {
       setClients([])
     }
@@ -111,8 +129,8 @@ export function JobsDashboard() {
       const q = searchQuery.toLowerCase()
       return (
         job.title.toLowerCase().includes(q) ||
-        job.department.toLowerCase().includes(q) ||
-        job.location.toLowerCase().includes(q) ||
+        String(job.industry || "").toLowerCase().includes(q) ||
+        String(job.location || "").toLowerCase().includes(q) ||
         (job.client_name || "").toLowerCase().includes(q) ||
         (job.client_id && clientsById.get(job.client_id)?.name.toLowerCase().includes(q))
       )
@@ -148,18 +166,35 @@ export function JobsDashboard() {
             jobId={editingJob.id}
             initialValues={{
               title: editingJob.title,
-              industry: editingJob.department,
+              industry: (editingJob as any).industry,
               location: editingJob.location,
-              type: editingJob.type,
+              employment_type: (editingJob as any).employment_type,
+              shift_type: (editingJob as any).shift_type,
+              urgency_tag: (editingJob as any).urgency_tag,
+              city: (editingJob as any).city,
+              salary_type: (editingJob as any).salary_type,
+              salary_min: (editingJob as any).salary_min,
+              salary_max: (editingJob as any).salary_max,
               description: editingJob.description,
-              requirements: editingJob.requirements,
-              salary_range: (editingJob as any).salary_range,
-              positions: (editingJob as any).positions,
+              openings: (editingJob as any).openings,
               client_name: (editingJob as any).client_name,
               client_id: (editingJob as any).client_id,
-              amount: (editingJob as any).amount,
-              skills_required: (editingJob as any).skills_required,
-              experience: (editingJob as any).experience,
+              apply_type: (editingJob as any).apply_type,
+              external_apply_url: (editingJob as any).external_apply_url,
+              skills_must_have: (editingJob as any).skills_must_have,
+              skills_good_to_have: (editingJob as any).skills_good_to_have,
+              sub_category: (editingJob as any).sub_category,
+              education_min: (editingJob as any).education_min,
+              experience_min_years: (editingJob as any).experience_min_years,
+              experience_max_years: (editingJob as any).experience_max_years,
+              languages_required: (editingJob as any).languages_required,
+              english_level: (editingJob as any).english_level,
+              license_type: (editingJob as any).license_type,
+              age_min: (editingJob as any).age_min,
+              age_max: (editingJob as any).age_max,
+              gender_preference: (editingJob as any).gender_preference,
+              role_category: (editingJob as any).role_category,
+              department_category: (editingJob as any).department_category,
             }}
           />
         )}
@@ -214,78 +249,124 @@ export function JobsDashboard() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredJobs.map(job => (
-            <Card key={job.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => router.push(`/jobs/${job.id}`)}>
-              <CardHeader className="pb-2">
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-2">
-                    <Badge variant={job.status === 'open' ? 'default' : 'secondary'}>
-                      {job.status}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      Posted {formatDistanceToNow(new Date(job.created_at), { addSuffix: true })}
-                    </span>
+          {filteredJobs.map((job) => {
+            const clientName = (job.client_id && clientsById.get(job.client_id)?.name) || job.client_name || ""
+            const clientLogo = job.client_id ? (clientsById.get(job.client_id)?.logo_url || null) : null
+            const pending = pendingCounts[job.id] || 0
+
+            return (
+              <Card
+                key={job.id}
+                className="cursor-pointer border-zinc-200 hover:border-zinc-300 hover:shadow-sm transition flex flex-col"
+                onClick={() => router.push(`/jobs/${job.id}`)}
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Badge className={job.status === "open" ? "bg-green-600" : "bg-zinc-600"}>{job.status}</Badge>
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        Posted {formatDistanceToNow(new Date(job.created_at), { addSuffix: true })}
+                      </span>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                          }}
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setEditingJob(job)
+                            setEditOpen(true)
+                          }}
+                        >
+                          Edit Job
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            navigator.clipboard.writeText(getBoardJobApplyUrl(job.id))
+                          }}
+                        >
+                          Share job link
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            const newStatus = job.status === "open" ? "inactive" : "open"
+                            await fetch(`/api/jobs/${job.id}`, {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ status: newStatus })
+                            })
+                            fetchJobs()
+                          }}
+                        >
+                          Change status
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" onClick={(e) => e.stopPropagation()}>
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => { setEditingJob(job); setEditOpen(true); }}>Edit Job</DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          navigator.clipboard.writeText(`${window.location.origin}/board/${job.id}`)
-                        }}
-                      >
-                        Share job link
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={async (e) => {
-                          e.stopPropagation()
-                          const newStatus = job.status === "open" ? "inactive" : "open"
-                          await fetch(`/api/jobs/${job.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: newStatus }) })
-                          fetchJobs()
-                        }}
-                      >
-                        Change status
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-                <CardTitle className="text-lg line-clamp-1">{job.title}</CardTitle>
-                <CardDescription className="line-clamp-1">
-                  {(job.client_id && clientsById.get(job.client_id)?.name) || job.client_name ? (
-                    <span className="mr-2">{(job.client_id && clientsById.get(job.client_id)?.name) || job.client_name}</span>
-                  ) : null}
-                  <span>{job.department}</span>
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="pb-2">
-                <div className="space-y-2 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-3.5 w-3.5" />
-                    {job.location}
+
+                  <CardTitle className="text-lg leading-snug line-clamp-1">{job.title}</CardTitle>
+
+                  <CardDescription className="flex items-center gap-2 line-clamp-1">
+                    {clientLogo ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={String(clientLogo)} alt="Logo" className="h-5 w-5 rounded border bg-white object-contain p-0.5" />
+                    ) : null}
+                    {clientName ? <span className="font-medium text-zinc-700">{clientName}</span> : null}
+                    {job.industry || job.department_category ? <span className="text-muted-foreground">•</span> : null}
+                    <span>{job.industry || job.department_category || ""}</span>
+                  </CardDescription>
+                </CardHeader>
+
+                <CardContent className="pb-3 flex-1">
+                  <div className="grid gap-2 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-3.5 w-3.5" />
+                      <span className="truncate">{job.location}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="h-3.5 w-3.5" />
+                      <span className="truncate">{job.employment_type ? String(job.employment_type).replace(/_/g, " ") : "—"}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Briefcase className="h-3.5 w-3.5" />
-                    {job.type}
-                  </div>
-                </div>
-              </CardContent>
-              <CardFooter className="pt-2 flex gap-2">
-                <Button variant="ghost" className="w-full text-blue-600 hover:text-blue-800 hover:bg-blue-50" onClick={(e) => { e.stopPropagation(); router.push(`/jobs/${job.id}?tab=all`) }}>
-                  View Applicants ({appCounts[job.id] || 0}) {pendingCounts[job.id] ? ` • ${pendingCounts[job.id]} pending` : ""}
-                </Button>
-                <Button variant="outline" className="w-full" onClick={(e) => { e.stopPropagation(); window.open(`/jobs/${job.id}/matches`, '_blank') }}>
-                  Database Matches ({dbMatchCounts[job.id] || 0})
-                </Button>
-              </CardFooter>
-            </Card>
-          ))}
+                </CardContent>
+
+                <CardFooter className="pt-0 grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    className="w-full justify-center"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      router.push(`/jobs/${job.id}?tab=all`)
+                    }}
+                  >
+                    Applicants ({appCounts[job.id] || 0}){pending ? ` • ${pending} pending` : ""}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-center"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      window.open(`/jobs/${job.id}/matches`, "_blank")
+                    }}
+                  >
+                    DB Matches ({dbMatchCounts[job.id] || 0})
+                  </Button>
+                </CardFooter>
+              </Card>
+            )
+          })}
           {filteredJobs.length === 0 && (
             <div className="col-span-full text-center py-12 text-muted-foreground">
               No jobs found. Create one to get started.
