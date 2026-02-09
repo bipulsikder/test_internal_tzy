@@ -25,6 +25,7 @@ import {
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { logger } from "@/lib/logger"
+import { invalidateSessionCache } from "@/lib/utils"
 
 interface UploadedFile {
   file: File
@@ -273,6 +274,12 @@ export function UploadSection() {
         title: result.updatedExisting ? "Updated Existing Profile" : "New Profile Created",
         description: `${file.name} ${result.updatedExisting ? "updated existing candidate" : "created new candidate"}`,
       })
+
+      if (successStatus === "created" || successStatus === "updated" || successStatus === "completed") {
+        invalidateSessionCache("internal:candidates:", { prefix: true })
+        invalidateSessionCache("internal:smartSearch:", { prefix: true })
+        invalidateSessionCache("internal:analytics:", { prefix: true })
+      }
     } catch (error) {
       logger.error(`❌ Error processing ${file.name}:`, error)
 

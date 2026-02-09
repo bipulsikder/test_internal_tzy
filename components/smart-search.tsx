@@ -13,6 +13,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { logger } from "@/lib/logger"
+import { getSessionCached, peekSessionCache } from "@/lib/utils"
 import {
   Search,
   Sparkles,
@@ -223,6 +224,7 @@ export function SmartSearch() {
 
     // Check cache first
     const cacheKey = JSON.stringify({ ...params, page })
+    const sessionKey = `internal:smartSearch:${cacheKey}`
     if (resultsCache[cacheKey]) {
       logger.info(`Serving search results from cache for page ${page}`)
       const cached = resultsCache[cacheKey]
@@ -230,6 +232,17 @@ export function SmartSearch() {
       // filteredResults will be set by useEffect hook that applies filters
       setTotalResultsServer(cached.total)
       setServerPaginated(cached.serverPaginated)
+      setIsSearching(false)
+      return
+    }
+
+    const persisted = peekSessionCache<{ items: SearchResult[]; total: number; serverPaginated: boolean }>(sessionKey)
+    if (persisted) {
+      logger.info(`Serving search results from session cache for page ${page}`)
+      setSearchResults(persisted.items)
+      setTotalResultsServer(persisted.total)
+      setServerPaginated(persisted.serverPaginated)
+      setResultsCache((prev) => ({ ...prev, [cacheKey]: persisted }))
       setIsSearching(false)
       return
     }
@@ -255,37 +268,31 @@ export function SmartSearch() {
     logger.info(`Search fetch: mode=${params.type} page=${page}`)
     
     try {
-      const response = await fetch(`/api/search?${searchParams.toString()}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      })
+      const url = `/api/search?${searchParams.toString()}`
+      const cached = await getSessionCached<{ items: SearchResult[]; total: number; serverPaginated: boolean }>(
+        sessionKey,
+        async () => {
+          const response = await fetch(url, { method: "GET", headers: { "Content-Type": "application/json" } })
+          const data = await response.json().catch(() => null)
+          if (!response.ok) throw new Error((data as any)?.error || "Search failed")
+          const items = Array.isArray(data) ? data : (data.items || [])
+          const total = Array.isArray(data) ? items.length : (data.total || items.length)
+          const processedResults = processSearchResults(items)
+          return { items: processedResults, total, serverPaginated: !Array.isArray(data) }
+        },
+        { ttlMs: 10 * 60_000 },
+      )
 
-      if (!response.ok) throw new Error("Search failed")
+      setServerPaginated(cached.serverPaginated)
+      setTotalResultsServer(cached.total)
+      setSearchResults(cached.items)
 
-      const data = await response.json()
-      const items = Array.isArray(data) ? data : (data.items || [])
-      const total = Array.isArray(data) ? items.length : (data.total || items.length)
-      
-      setServerPaginated(!Array.isArray(data))
-      setTotalResultsServer(total)
-      const processedResults = processSearchResults(items)
-      setSearchResults(processedResults)
-      // filteredResults will be set by useEffect hook that applies filters
-      
-      // Update cache
-      setResultsCache(prev => ({
-        ...prev,
-        [cacheKey]: {
-          items: processedResults,
-          total: total,
-          serverPaginated: !Array.isArray(data)
-        }
-      }))
+      setResultsCache((prev) => ({ ...prev, [cacheKey]: cached }))
       
       if (page === 1) {
         toast({
           title: "Search Complete",
-          description: `Found ${total} matching candidates`,
+          description: `Found ${cached.total} matching candidates`,
         })
       }
     } catch (error) {

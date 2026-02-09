@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react"
 import { logger } from "@/lib/logger"
+import { cachedFetchJson, invalidateSessionCache } from "@/lib/utils"
 
 interface Candidate {
   _id: string
@@ -71,34 +72,29 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const [sortBy, setSortByState] = useState("uploaded_at")
   const [sortOrder, setSortOrderState] = useState<'asc' | 'desc'>("desc")
 
-  const fetchCandidates = useCallback(async (page = currentPage, perPage = pageSize) => {
+  const fetchCandidates = useCallback(async (page = currentPage, perPage = pageSize, opts?: { force?: boolean }) => {
     try {
       setIsLoading(true)
       logger.info(`Fetching candidates from API (paginated): page=${page} perPage=${perPage} search=${searchQuery} status=${statusFilter} sort=${sortBy}:${sortOrder}`)
       const url = `/api/candidates?paginate=true&page=${page}&perPage=${perPage}&search=${encodeURIComponent(searchQuery)}&status=${encodeURIComponent(statusFilter)}&sortBy=${encodeURIComponent(sortBy)}&sortOrder=${encodeURIComponent(sortOrder)}`
-      const response = await fetch(url)
-      if (response.ok) {
-        const data = await response.json()
-        logger.debug("API Response:", data)
+      const data = await cachedFetchJson<any>(`internal:candidates:${url}`, url, undefined, {
+        ttlMs: 5 * 60_000,
+        force: Boolean(opts?.force),
+      })
+      logger.debug("API Response:", data)
 
-        // Expect { items, page, perPage, total }
-        const items = Array.isArray(data) ? data : (data.items || [])
-        const totalCount = Array.isArray(data) ? items.length : (data.total || items.length)
-        const pageNum = Array.isArray(data) ? page : (data.page || page)
-        const per = Array.isArray(data) ? perPage : (data.perPage || perPage)
+      const items = Array.isArray(data) ? data : (data.items || [])
+      const totalCount = Array.isArray(data) ? items.length : (data.total || items.length)
+      const pageNum = Array.isArray(data) ? page : (data.page || page)
+      const per = Array.isArray(data) ? perPage : (data.perPage || perPage)
 
-        logger.info(`Fetched ${items.length} candidates of total ${totalCount}`)
-        logger.info(`Setting candidates: page=${page} count=${items.length}`)
+      logger.info(`Fetched ${items.length} candidates of total ${totalCount}`)
+      logger.info(`Setting candidates: page=${page} count=${items.length}`)
 
-        setCandidates(items)
-        setTotal(totalCount)
-        setHasMore(pageNum * per < totalCount)
-        setLastFetched(new Date())
-      } else {
-        logger.error('Failed to fetch candidates:', response.status, response.statusText)
-        const errorData = await response.json().catch(() => ({}))
-        logger.error('Error details:', errorData)
-      }
+      setCandidates(items)
+      setTotal(totalCount)
+      setHasMore(pageNum * per < totalCount)
+      setLastFetched(new Date())
     } catch (error) {
       logger.error('Error fetching candidates:', error)
     } finally {
@@ -108,7 +104,8 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
 
   const refreshCandidates = useCallback(async () => {
     logger.info("Refreshing candidates...")
-    await fetchCandidates(1, pageSize)
+    invalidateSessionCache("internal:candidates:", { prefix: true })
+    await fetchCandidates(1, pageSize, { force: true })
     setCurrentPage(1)
   }, [fetchCandidates, pageSize])
 

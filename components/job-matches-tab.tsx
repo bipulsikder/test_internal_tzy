@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Eye, RefreshCw, User, MapPin, Briefcase, CheckCircle, Clock, Sparkles, Loader2 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import dynamic from "next/dynamic"
+import { cachedFetchJson, invalidateSessionCache } from "@/lib/utils"
 
 const CandidatePreviewDialogDynamic = dynamic(() => import("./candidate-preview-dialog").then(m => m.CandidatePreviewDialog), {
   ssr: false,
@@ -31,18 +32,16 @@ export function JobMatchesTab({ jobId, onShortlist }: JobMatchesTabProps) {
   const [aiByCandidateId, setAiByCandidateId] = useState<Record<string, { summary: string; expanded: boolean; visible: boolean }>>({})
   const [aiLoadingByCandidateId, setAiLoadingByCandidateId] = useState<Record<string, true>>({})
 
-  useEffect(() => {
-    fetchMatches()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, page])
-
   const fetchMatches = async (opts?: { refresh?: boolean }) => {
     try {
       if (!opts?.refresh) setLoading(true)
       const url = `/api/jobs/${jobId}/matches?page=${page}&perPage=${perPage}${opts?.refresh ? "&refresh=1" : ""}`
-      const res = await fetch(url)
-      if (!res.ok) throw new Error("Failed to fetch matches")
-      const data = await res.json()
+      const data = await cachedFetchJson<any>(
+        `internal:job-matches:${jobId}:page:${page}:per:${perPage}:${opts?.refresh ? "refresh" : "base"}`,
+        url,
+        undefined,
+        { ttlMs: 5 * 60_000, force: Boolean(opts?.refresh) },
+      )
       setMatches(data.items || [])
       setTotal(data.total || 0)
     } catch (error) {
@@ -56,8 +55,14 @@ export function JobMatchesTab({ jobId, onShortlist }: JobMatchesTabProps) {
     }
   }
 
+  useEffect(() => {
+    fetchMatches()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, page, perPage])
+
   const refreshMatches = async () => {
     setRefreshing(true)
+    invalidateSessionCache(`internal:job-matches:${jobId}:`, { prefix: true })
     await fetchMatches({ refresh: true })
     setRefreshing(false)
     toast({ title: "Refreshed", description: "Database matches have been recomputed." })

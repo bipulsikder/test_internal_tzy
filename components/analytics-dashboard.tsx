@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Search, Upload, Clock, Download, Filter, RefreshCw, Eye, FileText, ExternalLink } from "lucide-react"
+import { cachedFetchJson, invalidateSessionCache } from "@/lib/utils"
 
 interface AnalyticsData {
   upload_count: number
@@ -80,14 +81,12 @@ export function AnalyticsDashboard() {
     }
   }, [activeTab])
 
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = async (opts?: { force?: boolean }) => {
     try {
-      const res = await fetch("/api/hr/analytics")
-      if (!res.ok) {
-        const errorData = await res.json()
-        throw new Error(errorData.error || "Failed to fetch analytics")
-      }
-      const jsonData = await res.json()
+      const jsonData = await cachedFetchJson<AnalyticsData>(`internal:analytics:/api/hr/analytics`, "/api/hr/analytics", undefined, {
+        ttlMs: 60_000,
+        force: Boolean(opts?.force),
+      })
       setData(jsonData)
     } catch (err: any) {
       console.error(err)
@@ -97,30 +96,32 @@ export function AnalyticsDashboard() {
     }
   }
 
-  const fetchSearchLogs = async (silent?: boolean) => {
+  const fetchSearchLogs = async (silent?: boolean, opts?: { force?: boolean }) => {
     if (!silent) setLogsLoading(true)
     try {
       const params = buildFilterParams(month, startDate, endDate)
-      const res = await fetch(`/api/hr/analytics/logs?${params.toString()}`)
-      if (res.ok) {
-        const json = await res.json()
-        setSearchLogs(json.logs || [])
-      }
+      const url = `/api/hr/analytics/logs?${params.toString()}`
+      const json = await cachedFetchJson<any>(`internal:analytics:${url}`, url, undefined, {
+        ttlMs: 60_000,
+        force: Boolean(opts?.force),
+      })
+      setSearchLogs(json.logs || [])
     } catch (e) {
     } finally {
       if (!silent) setLogsLoading(false)
     }
   }
 
-  const fetchUploadLogs = async (silent?: boolean) => {
+  const fetchUploadLogs = async (silent?: boolean, opts?: { force?: boolean }) => {
     if (!silent) setLogsLoading(true)
     try {
       const params = buildFilterParams(month, startDate, endDate)
-      const res = await fetch(`/api/hr/analytics/upload-logs?${params.toString()}`)
-      if (res.ok) {
-        const json = await res.json()
-        setUploadLogs(json.logs || [])
-      }
+      const url = `/api/hr/analytics/upload-logs?${params.toString()}`
+      const json = await cachedFetchJson<any>(`internal:analytics:${url}`, url, undefined, {
+        ttlMs: 60_000,
+        force: Boolean(opts?.force),
+      })
+      setUploadLogs(json.logs || [])
     } catch (e) {
     } finally {
       if (!silent) setLogsLoading(false)
@@ -136,10 +137,12 @@ export function AnalyticsDashboard() {
     setLogsLoading(true)
     try {
       if (activeTab === "search") {
-        await fetchSearchLogs(true)
+        invalidateSessionCache("internal:analytics:/api/hr/analytics/logs?", { prefix: true })
+        await fetchSearchLogs(true, { force: true })
       }
       if (activeTab === "uploads") {
-        await fetchUploadLogs(true)
+        invalidateSessionCache("internal:analytics:/api/hr/analytics/upload-logs?", { prefix: true })
+        await fetchUploadLogs(true, { force: true })
       }
     } finally {
       setLogsLoading(false)

@@ -11,7 +11,7 @@ import { CreateJobDialog } from "./create-job-dialog"
 import { formatDistanceToNow } from "date-fns"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { getBoardJobApplyUrl } from "@/lib/utils"
+import { cachedFetchJson, getBoardJobApplyUrl, getSessionCached, invalidateSessionCache, peekSessionCache } from "@/lib/utils"
 
 interface Job {
   id: string
@@ -62,51 +62,91 @@ export function JobsDashboard() {
   const [pendingCounts, setPendingCounts] = useState<Record<string, number>>({})
   const [dbMatchCounts, setDbMatchCounts] = useState<Record<string, number>>({})
   const router = useRouter()
+  const jobsCacheKey = "internal:jobs:/api/jobs"
+  const jobCountsCacheKey = "internal:jobs:counts"
 
   useEffect(() => {
     fetchJobs()
     fetchClients()
   }, [])
 
-  const fetchClients = async () => {
+  const fetchClients = async (opts?: { force?: boolean }) => {
     try {
-      const res = await fetch("/api/clients")
-      const data = res.ok ? await res.json() : []
+      const data = await cachedFetchJson<any[]>(`internal:jobs:/api/clients`, "/api/clients", undefined, {
+        ttlMs: 10 * 60_000,
+        force: Boolean(opts?.force),
+      })
       setClients(Array.isArray(data) ? data.map((c: any) => ({ id: c.id, name: c.name, slug: c.slug, logo_url: c.logo_url })) : [])
     } catch {
       setClients([])
     }
   }
 
-  const fetchJobs = async () => {
-    setLoading(true)
-    try {
-      const res = await fetch("/api/jobs")
-      if (res.ok) {
-        const data = await res.json()
-        setJobs(data)
+  const applyCounts = (payload: { appCounts: Record<string, number>; pendingCounts: Record<string, number>; dbMatchCounts: Record<string, number> }) => {
+    setAppCounts(payload.appCounts || {})
+    setPendingCounts(payload.pendingCounts || {})
+    setDbMatchCounts(payload.dbMatchCounts || {})
+  }
+
+  const fetchJobCounts = async (data: Job[], opts?: { force?: boolean }) => {
+    if (!Array.isArray(data) || data.length === 0) {
+      applyCounts({ appCounts: {}, pendingCounts: {}, dbMatchCounts: {} })
+      return
+    }
+    const payload = await getSessionCached(
+      jobCountsCacheKey,
+      async () => {
         const counts: Record<string, number> = {}
         const pendings: Record<string, number> = {}
         const dbCounts: Record<string, number> = {}
         await Promise.all(
           (data || []).map(async (job: Job) => {
             try {
-              const appsRes = await fetch(`/api/applications?jobId=${job.id}`)
-              const apps = appsRes.ok ? await appsRes.json() : []
+              const apps = await cachedFetchJson<any[]>(
+                `internal:jobs:/api/applications?jobId=${job.id}`,
+                `/api/applications?jobId=${job.id}`,
+                undefined,
+                { ttlMs: 60_000 },
+              )
               counts[job.id] = apps.length
               pendings[job.id] = (apps || []).filter((a: any) => a.status === "applied").length
             } catch {}
             try {
-              const dmRes = await fetch(`/api/jobs/${job.id}/matches?countOnly=1`)
-              const dm = dmRes.ok ? await dmRes.json() : { total: 0 }
+              const dm = await cachedFetchJson<{ total: number }>(
+                `internal:jobs:/api/jobs/${job.id}/matches?countOnly=1`,
+                `/api/jobs/${job.id}/matches?countOnly=1`,
+                undefined,
+                { ttlMs: 60_000 },
+              )
               dbCounts[job.id] = dm.total || 0
             } catch {}
           })
         )
-        setAppCounts(counts)
-        setPendingCounts(pendings)
-        setDbMatchCounts(dbCounts)
-      }
+        return { appCounts: counts, pendingCounts: pendings, dbMatchCounts: dbCounts }
+      },
+      { ttlMs: 60_000, force: Boolean(opts?.force) },
+    )
+    applyCounts(payload as { appCounts: Record<string, number>; pendingCounts: Record<string, number>; dbMatchCounts: Record<string, number> })
+  }
+
+  const fetchJobs = async (opts?: { force?: boolean }) => {
+    const force = Boolean(opts?.force)
+    const cachedJobs = !force ? peekSessionCache<Job[]>(jobsCacheKey) : null
+    const cachedCounts = !force ? peekSessionCache<{ appCounts: Record<string, number>; pendingCounts: Record<string, number>; dbMatchCounts: Record<string, number> }>(jobCountsCacheKey) : null
+    if (cachedJobs && cachedJobs.length) {
+      setJobs(cachedJobs)
+      setLoading(false)
+    } else {
+      setLoading(true)
+    }
+    if (cachedCounts) applyCounts(cachedCounts)
+    try {
+      const data = await cachedFetchJson<Job[]>(jobsCacheKey, "/api/jobs", undefined, {
+        ttlMs: 2 * 60_000,
+        force,
+      })
+      setJobs(data)
+      await fetchJobCounts(data, { force })
     } catch (error) {
       console.error("Failed to fetch jobs", error)
     } finally {
@@ -146,7 +186,11 @@ export function JobsDashboard() {
         <CreateJobDialog 
           open={createOpen} 
           onOpenChange={setCreateOpen} 
-          onJobCreated={fetchJobs}
+          onJobCreated={async () => {
+            invalidateSessionCache("internal:jobs:", { prefix: true })
+            invalidateSessionCache(jobCountsCacheKey)
+            await fetchJobs({ force: true })
+          }}
           trigger={
             <Button>
               <Plus className="mr-2 h-4 w-4" />
@@ -162,7 +206,11 @@ export function JobsDashboard() {
               setEditOpen(open)
               if (!open) setEditingJob(null)
             }}
-            onJobCreated={fetchJobs}
+            onJobCreated={async () => {
+              invalidateSessionCache("internal:jobs:", { prefix: true })
+              invalidateSessionCache(jobCountsCacheKey)
+              await fetchJobs({ force: true })
+            }}
             jobId={editingJob.id}
             initialValues={{
               title: editingJob.title,
@@ -307,7 +355,9 @@ export function JobsDashboard() {
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({ status: newStatus })
                             })
-                            fetchJobs()
+                            invalidateSessionCache("internal:jobs:", { prefix: true })
+                            invalidateSessionCache(jobCountsCacheKey)
+                            fetchJobs({ force: true })
                           }}
                         >
                           Change status

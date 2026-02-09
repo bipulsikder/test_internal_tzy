@@ -127,14 +127,6 @@ export function CandidateDashboard() {
     setMounted(true)
   }, [])
 
-  // Auto-refresh candidates every time the component is accessed
-  useEffect(() => {
-    if (mounted) {
-      logger.info("Auto-refreshing candidates...")
-      refreshCandidates()
-    }
-  }, [mounted, refreshCandidates])
-
   // Debug logging
   useEffect(() => {
     logger.debug("Candidates state updated:", {

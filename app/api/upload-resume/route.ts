@@ -283,7 +283,7 @@ export async function POST(request: NextRequest) {
 
       // Enforce resume content presence and quality
       const resumeText = (parsedData.resumeText || "").trim()
-      const resumeTextLooksErroneous = /error|processing error|extraction failed/i.test(resumeText)
+      const resumeTextLooksErroneous = /^(error extracting text from|doc processing error:)/i.test(resumeText)
       if (!resumeText || resumeText.length < 50 || resumeTextLooksErroneous) {
         if (uploadLogId) {
           await supabaseAdmin

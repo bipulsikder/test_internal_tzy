@@ -142,10 +142,8 @@ export class BulkResumeParser {
           // Add candidate to database
           const candidateId = await SupabaseCandidateService.addCandidate({
             ...parsedData,
-            file_name: file.name,
-            file_url: fileUrl,
-            file_size: file.size,
-            file_type: file.type,
+            fileName: file.name,
+            fileUrl,
             parsing_method: 'gemini',
             parsing_confidence: 0.95
           })
@@ -317,4 +315,3 @@ export class BulkResumeParser {
     }
   }
 }
-

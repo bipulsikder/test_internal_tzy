@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Building2, MoreHorizontal, Plus, Trash2, Upload } from "lucide-react"
+import { cachedFetchJson, invalidateSessionCache } from "@/lib/utils"
 
 type Client = {
   id: string
@@ -92,11 +93,13 @@ export function ClientsDashboard() {
     additional_contacts: [] as { name: string; email: string; phone: string }[]
   })
 
-  const fetchClients = async () => {
+  const fetchClients = async (opts?: { force?: boolean }) => {
     setLoading(true)
     try {
-      const res = await fetch("/api/clients")
-      const data = res.ok ? await res.json() : []
+      const data = await cachedFetchJson<any[]>(`internal:clients:/api/clients`, "/api/clients", undefined, {
+        ttlMs: 10 * 60_000,
+        force: Boolean(opts?.force),
+      })
       const rows = Array.isArray(data) ? (data as any[]) : []
       setClients(rows as Client[])
     } finally {
@@ -245,7 +248,8 @@ export function ClientsDashboard() {
 
       toast({ title: "Saved", description: editing ? "Client updated." : "Client created." })
       setDialogOpen(false)
-      await fetchClients()
+      invalidateSessionCache("internal:clients:", { prefix: true })
+      await fetchClients({ force: true })
     } catch (e: any) {
       toast({ title: "Error", description: e.message || "Failed to save", variant: "destructive" })
     } finally {
@@ -271,7 +275,8 @@ export function ClientsDashboard() {
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error(data?.error || "Failed to upload logo")
       toast({ title: "Logo updated" })
-      await fetchClients()
+      invalidateSessionCache("internal:clients:", { prefix: true })
+      await fetchClients({ force: true })
     } catch (e: any) {
       toast({ title: "Upload failed", description: e.message || "Failed", variant: "destructive" })
     }
@@ -284,7 +289,8 @@ export function ClientsDashboard() {
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error(data?.error || "Failed to delete")
       toast({ title: "Deleted" })
-      await fetchClients()
+      invalidateSessionCache("internal:clients:", { prefix: true })
+      await fetchClients({ force: true })
     } catch (e: any) {
       toast({ title: "Delete failed", description: e.message || "Failed", variant: "destructive" })
     }

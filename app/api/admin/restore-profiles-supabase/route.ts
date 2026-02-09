@@ -23,7 +23,7 @@ export async function POST(request: Request) {
                               !candidate.totalExperience ||
                               (candidate.technicalSkills && candidate.technicalSkills.length === 0);
         
-        if (hasMissingData && candidate.resumeUrl) {
+        if (hasMissingData && candidate.fileUrl) {
           // Re-parse the resume to restore missing data
           // This would typically call your resume parsing service
           // For now, we'll just mark it as processed

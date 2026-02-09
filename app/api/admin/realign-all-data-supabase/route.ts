@@ -16,6 +16,7 @@ export async function POST(request: Request) {
     let updatedCount = 0
     for (const candidate of candidates) {
       try {
+        if (!candidate.id) continue
         // Update the candidate with the same data to trigger any normalization logic
         await SupabaseCandidateService.updateCandidate(candidate.id, candidate)
         updatedCount++

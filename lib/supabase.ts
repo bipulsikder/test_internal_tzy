@@ -1,4 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
+import {
+  CLIENT_LOGOS_BUCKET_ALLOWED_MIME_TYPES,
+  CLIENT_LOGOS_BUCKET_NAME,
+  RESUME_BUCKET_ALLOWED_MIME_TYPES,
+  RESUME_BUCKET_NAME,
+} from "@/lib/constants/storage"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -57,24 +63,19 @@ async function ensureBucketExists(params: {
 
 export async function ensureResumeBucketExists() {
   return ensureBucketExists({
-    bucketName: 'resume-files',
+    bucketName: RESUME_BUCKET_NAME,
     public: true,
     fileSizeLimit: 10485760,
-    allowedMimeTypes: [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/msword',
-      'text/plain',
-    ],
+    allowedMimeTypes: [...RESUME_BUCKET_ALLOWED_MIME_TYPES],
   })
 }
 
 export async function ensureClientLogosBucketExists() {
   return ensureBucketExists({
-    bucketName: 'client-logos',
+    bucketName: CLIENT_LOGOS_BUCKET_NAME,
     public: true,
     fileSizeLimit: 5242880,
-    allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'],
+    allowedMimeTypes: [...CLIENT_LOGOS_BUCKET_ALLOWED_MIME_TYPES],
   })
 }
 

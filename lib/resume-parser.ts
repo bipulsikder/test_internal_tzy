@@ -283,6 +283,12 @@ function looksLikePdfStructure(text: string): boolean {
   return head.length > 600 && ratio < 0.18
 }
 
+function isExtractionErrorMarker(text: string): boolean {
+  const t = String(text || "").trim()
+  if (!t) return false
+  return /^(error extracting text from|doc processing error:)/i.test(t)
+}
+
 function isNameConsistentWithText(name: string, resumeText: string): boolean {
   const n = (name || "").trim().toLowerCase()
   const t = (resumeText || "").trim().toLowerCase()
@@ -307,7 +313,7 @@ function isValidParsedData(data: any): boolean {
 
   // Must have readable resume text content
   const resumeText = (data.resumeText || "").trim()
-  const resumeTextLooksErroneous = /error|processing error|extraction failed/i.test(resumeText)
+  const resumeTextLooksErroneous = isExtractionErrorMarker(resumeText)
   const resumeTextLooksPdf = looksLikePdfStructure(resumeText)
   if (!resumeText || resumeText.length < 50 || resumeTextLooksErroneous || resumeTextLooksPdf) {
     console.log("❌ Missing or invalid resume content")
@@ -487,9 +493,6 @@ Return ONLY the JSON object:`
         })
         const content = result.response.text()
         
-        console.log("Raw Gemini response:", content)
-        console.log("🔍 Looking for name in response...")
-
         // Extract JSON from the response - try multiple approaches
         let parsedData = null
         
@@ -498,9 +501,7 @@ Return ONLY the JSON object:`
         if (jsonMatch) {
           try {
             parsedData = JSON.parse(jsonMatch[0])
-            console.log("✅ JSON extracted using method 1")
           } catch (e) {
-            console.log("Method 1 failed, trying method 2")
           }
         }
         
@@ -513,10 +514,8 @@ Return ONLY the JSON object:`
               const jsonMatch2 = jsonPart.match(/\{[\s\S]*\}/)
               if (jsonMatch2) {
                 parsedData = JSON.parse(jsonMatch2[0])
-                console.log("✅ JSON extracted using method 2")
               }
             } catch (e) {
-              console.log("Method 2 failed, trying method 3")
             }
           }
         }
@@ -529,7 +528,6 @@ Return ONLY the JSON object:`
               try {
                 parsedData = JSON.parse(match)
                 if (parsedData.name && parsedData.name !== "Unknown") {
-                  console.log("✅ JSON extracted using method 3")
                   break
                 }
               } catch (e) {
@@ -542,8 +540,6 @@ Return ONLY the JSON object:`
         if (!parsedData) {
           throw new Error("No valid JSON found in Gemini response")
         }
-
-        console.log("Parsed JSON data:", parsedData)
         
         // Validate the extracted name - it should not be a project name or company name
         if (parsedData.name) {
@@ -558,8 +554,6 @@ Return ONLY the JSON object:`
           const isSuspicious = suspiciousNames.some(word => nameLower.includes(word))
           
           if (isSuspicious) {
-            console.log("⚠️ Suspicious name detected, likely incorrect extraction")
-            console.log("Suspicious name:", parsedData.name)
             // Try to find a better name in the text
             const namePatterns = [
               /name\s*:\s*([^\n]+)/i,
@@ -573,7 +567,6 @@ Return ONLY the JSON object:`
               if (match && match[1]) {
                 const potentialName = match[1].trim()
                 if (potentialName.length > 2 && !suspiciousNames.some(word => potentialName.toLowerCase().includes(word))) {
-                  console.log("✅ Found better name using pattern:", potentialName)
                   parsedData.name = potentialName
                   break
                 }
@@ -582,10 +575,8 @@ Return ONLY the JSON object:`
             
             // If still suspicious, try to find the actual person's name from the resume
             if (isSuspicious) {
-              console.log("🔍 Attempting to extract actual person name from resume text...")
               const actualName = extractActualPersonName(text)
               if (actualName) {
-                console.log("✅ Found actual person name:", actualName)
                 parsedData.name = actualName
               }
             }
@@ -622,19 +613,16 @@ Return ONLY the JSON object:`
 
         if (emailFromText && (!cleanedData.email || !text.toLowerCase().includes(cleanedData.email.toLowerCase()))) {
           cleanedData.email = emailFromText
-          console.log("✅ Email corrected from resume text:", cleanedData.email)
         }
 
         if (phoneFromText && (!cleanedData.phone || !text.includes(cleanedData.phone))) {
           cleanedData.phone = phoneFromText
-          console.log("✅ Phone corrected from resume text:", cleanedData.phone)
         }
 
         if (cleanedData.name && !isNameConsistentWithText(cleanedData.name, text)) {
           const actualName = extractActualPersonName(text) || extractNameFromText(text)
           if (actualName) {
             cleanedData.name = actualName
-            console.log("✅ Name corrected from resume text:", cleanedData.name)
           }
         }
 
@@ -644,7 +632,6 @@ Return ONLY the JSON object:`
           const nameFromText = extractNameFromText(text)
           if (nameFromText) {
             cleanedData.name = nameFromText
-            console.log("✅ Name corrected from text analysis:", cleanedData.name)
           }
         }
 
@@ -653,7 +640,6 @@ Return ONLY the JSON object:`
           const locationFromText = extractLocationFromText(text)
           if (locationFromText) {
             cleanedData.location = locationFromText
-            console.log("✅ Location corrected from text analysis:", cleanedData.location)
           }
         }
 
@@ -662,7 +648,6 @@ Return ONLY the JSON object:`
           const roleFromText = extractRoleFromText(text)
           if (roleFromText) {
             cleanedData.currentRole = roleFromText
-            console.log("✅ Current role corrected from text analysis:", cleanedData.currentRole)
           }
         }
 
@@ -671,7 +656,6 @@ Return ONLY the JSON object:`
           const expFromText = extractExperienceFromText(text)
           if (expFromText) {
             cleanedData.totalExperience = expFromText
-            console.log("✅ Experience corrected from text analysis:", cleanedData.totalExperience)
           }
         }
         
@@ -2752,9 +2736,6 @@ Return ONLY the JSON object:`
     )
 
     const content = response.data.choices[0].message.content
-    console.log("Raw OpenRouter response:", content)
-    console.log("🔍 Looking for name in response...")
-
     // Extract JSON from the response - try multiple approaches
     let parsedData = null
     
@@ -2763,9 +2744,7 @@ Return ONLY the JSON object:`
     if (jsonMatch) {
       try {
         parsedData = JSON.parse(jsonMatch[0])
-        console.log("✅ JSON extracted using method 1")
       } catch (e) {
-        console.log("Method 1 failed, trying method 2")
       }
     }
     
@@ -2778,10 +2757,8 @@ Return ONLY the JSON object:`
           const jsonMatch2 = jsonPart.match(/\{[\s\S]*\}/)
           if (jsonMatch2) {
             parsedData = JSON.parse(jsonMatch2[0])
-            console.log("✅ JSON extracted using method 2")
           }
         } catch (e) {
-          console.log("Method 2 failed, trying method 3")
         }
       }
     }
@@ -2794,7 +2771,6 @@ Return ONLY the JSON object:`
           try {
             parsedData = JSON.parse(match)
             if (parsedData.name && parsedData.name !== "Unknown") {
-              console.log("✅ JSON extracted using method 3")
               break
             }
           } catch (e) {
@@ -2807,8 +2783,6 @@ Return ONLY the JSON object:`
     if (!parsedData) {
       throw new Error("No valid JSON found in OpenRouter response")
     }
-
-    console.log("Parsed JSON data:", parsedData)
     
     // Validate the extracted name - it should not be a project name or company name
     if (parsedData.name) {
@@ -2823,8 +2797,6 @@ Return ONLY the JSON object:`
       const isSuspicious = suspiciousNames.some(word => nameLower.includes(word))
       
       if (isSuspicious) {
-        console.log("⚠️ Suspicious name detected, likely incorrect extraction")
-        console.log("Suspicious name:", parsedData.name)
         // Try to find a better name in the text
         const namePatterns = [
           /name\s*:\s*([^\n]+)/i,
@@ -2838,7 +2810,6 @@ Return ONLY the JSON object:`
           if (match && match[1]) {
             const potentialName = match[1].trim()
             if (potentialName.length > 2 && !suspiciousNames.some(word => potentialName.toLowerCase().includes(word))) {
-              console.log("✅ Found better name using pattern:", potentialName)
               parsedData.name = potentialName
               break
             }
@@ -2847,10 +2818,8 @@ Return ONLY the JSON object:`
         
         // If still suspicious, try to find the actual person's name from the resume
         if (isSuspicious) {
-          console.log("🔍 Attempting to extract actual person name from resume text...")
           const actualName = extractActualPersonName(text)
           if (actualName) {
-            console.log("✅ Found actual person name:", actualName)
             parsedData.name = actualName
           }
         }
@@ -2886,7 +2855,6 @@ Return ONLY the JSON object:`
       const nameFromText = extractNameFromText(text)
       if (nameFromText) {
         cleanedData.name = nameFromText
-        console.log("✅ Name corrected from text analysis:", cleanedData.name)
       }
     }
 
@@ -2895,7 +2863,6 @@ Return ONLY the JSON object:`
       const locationFromText = extractLocationFromText(text)
       if (locationFromText) {
         cleanedData.location = locationFromText
-        console.log("✅ Location corrected from text analysis:", cleanedData.location)
       }
     }
 
@@ -2904,7 +2871,6 @@ Return ONLY the JSON object:`
       const roleFromText = extractRoleFromText(text)
       if (roleFromText) {
         cleanedData.currentRole = roleFromText
-        console.log("✅ Current role corrected from text analysis:", cleanedData.currentRole)
       }
     }
 
@@ -2913,7 +2879,6 @@ Return ONLY the JSON object:`
       const expFromText = extractExperienceFromText(text)
       if (expFromText) {
         cleanedData.totalExperience = expFromText
-        console.log("✅ Experience corrected from text analysis:", cleanedData.totalExperience)
       }
     }
     

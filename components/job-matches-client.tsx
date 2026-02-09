@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { RefreshCw, User, CheckCircle, MapPin, Briefcase, Eye, Loader2, Sparkles } from "lucide-react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
+import { cachedFetchJson, invalidateSessionCache } from "@/lib/utils"
 
 const CandidatePreviewDialogDynamic = dynamic(() => import("./candidate-preview-dialog").then(m => m.CandidatePreviewDialog), {
   ssr: false,
@@ -53,9 +54,12 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
     try {
       setLoading(true)
       const url = `/api/jobs/${jobId}/matches?page=${page}&perPage=${perPage}${opts?.refresh ? "&refresh=1" : ""}`
-      const res = await fetch(url, { cache: "no-store" })
-      if (!res.ok) throw new Error("Failed to load matches")
-      const data = await res.json()
+      const data = await cachedFetchJson<any>(
+        `internal:job-matches:${jobId}:page:${page}:per:${perPage}:${opts?.refresh ? "refresh" : "base"}`,
+        url,
+        undefined,
+        { ttlMs: 5 * 60_000, force: Boolean(opts?.refresh) },
+      )
       setItems(data.items || [])
       setTotal(data.total || 0)
     } catch (e) {
@@ -68,12 +72,16 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
   useEffect(() => {
     fetchMatches()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, perPage])
+  }, [jobId, page, perPage])
 
   const refreshExistingApps = async () => {
     try {
-      const res = await fetch(`/api/applications?jobId=${jobId}`, { cache: "no-store" })
-      const rows = res.ok ? await res.json() : []
+      const rows = await cachedFetchJson<any[]>(
+        `internal:applications:job:${jobId}`,
+        `/api/applications?jobId=${jobId}`,
+        undefined,
+        { ttlMs: 5 * 60_000 },
+      )
       const next: Record<string, { id: string; status: string }> = {}
       for (const row of Array.isArray(rows) ? rows : []) {
         const cid = String((row as any)?.candidate_id || "").trim()
@@ -95,6 +103,7 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
   const refreshMatches = async () => {
     try {
       setRefreshing(true)
+      invalidateSessionCache(`internal:job-matches:${jobId}:`, { prefix: true })
       await fetchMatches({ refresh: true })
       toast({ title: "Database refreshed", description: "Matches recomputed and cached" })
     } catch (e) {
@@ -172,6 +181,8 @@ export default function MatchesClient({ jobId }: { jobId: string }) {
         toast({ title: "Saved", description: "Candidate assigned successfully." })
       }
 
+      invalidateSessionCache(`internal:applications:job:${jobId}`)
+      invalidateSessionCache(`internal:job-invites:${jobId}`)
       await refreshExistingApps()
       setManageOpen(false)
     } catch (e: any) {

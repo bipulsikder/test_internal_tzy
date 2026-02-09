@@ -1,7 +1,10 @@
 import { supabaseAdmin } from './supabase'
 
-export const RESUME_BUCKET_NAME = 'resume-files'
-export const CLIENT_LOGOS_BUCKET_NAME = 'client-logos'
+export {
+  CLIENT_LOGOS_BUCKET_NAME,
+  RESUME_BUCKET_NAME,
+} from "@/lib/constants/storage"
+import { RESUME_BUCKET_NAME } from "@/lib/constants/storage"
 
 export const BUCKET_NAME = RESUME_BUCKET_NAME
 

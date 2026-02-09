@@ -274,18 +274,18 @@ export function CandidatePreviewDialog({
   }
 
   const getPrimaryMatchArea = (cand: typeof safeCandidate): string => {
-    const kws = (cand.matchingKeywords || []).map(k => k.toLowerCase())
+    const kws = (cand.matchingKeywords || []).map((k: string) => String(k || "").toLowerCase()).filter(Boolean)
     if (kws.length === 0) return "General profile"
 
     const areas: string[] = []
     const textIncludes = (text?: string) => {
       const lower = (text || "").toLowerCase()
-      return kws.some(k => k && lower.includes(k))
+      return kws.some((k: string) => Boolean(k) && lower.includes(k))
     }
 
     if (textIncludes(cand.currentRole) || textIncludes(cand.desiredRole)) areas.push("Role")
-    if ((cand.technicalSkills || []).some(s => kws.some(k => (s || "").toLowerCase().includes(k)))) areas.push("Skills")
-    if ((cand.softSkills || []).some(s => kws.some(k => (s || "").toLowerCase().includes(k)))) areas.push("Soft skills")
+    if ((cand.technicalSkills || []).some((s: string) => kws.some((k: string) => (s || "").toLowerCase().includes(k)))) areas.push("Skills")
+    if ((cand.softSkills || []).some((s: string) => kws.some((k: string) => (s || "").toLowerCase().includes(k)))) areas.push("Soft skills")
     if (textIncludes(cand.currentCompany)) areas.push("Company")
     if (textIncludes(cand.summary)) areas.push("Summary")
     if (textIncludes(cand.resumeText)) areas.push("Resume text")
@@ -698,7 +698,7 @@ export function CandidatePreviewDialog({
                     </CardHeader>
                     <CardContent>
                       <div className="flex flex-wrap gap-2">
-                        {safeCandidate.tags.map((tag, index) => (
+                        {safeCandidate.tags.map((tag: string, index: number) => (
                           <Badge key={index} variant="outline" className="px-3 py-1 text-sm bg-indigo-50 border-indigo-200 text-indigo-700">
                             {tag}
                           </Badge>
@@ -823,7 +823,7 @@ export function CandidatePreviewDialog({
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-8">
-                        {safeCandidate.workExperience.map((experience, index) => (
+                        {safeCandidate.workExperience.map((experience: any, index: number) => (
                           <div key={index} className="relative">
                             {/* Timeline connector */}
                             {index < safeCandidate.workExperience!.length - 1 && (
@@ -871,7 +871,7 @@ export function CandidatePreviewDialog({
                                     </h4>
                                     <div className="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-300">
                                       <ul className="space-y-2">
-                                        {experience.responsibilities.map((responsibility, respIndex) => (
+                                        {experience.responsibilities.map((responsibility: string, respIndex: number) => (
                                           <li key={respIndex} className="flex items-start">
                                             <span className="text-blue-500 mr-3 mt-1">•</span>
                                             <span className="text-gray-700 leading-relaxed">{responsibility}</span>
@@ -890,7 +890,7 @@ export function CandidatePreviewDialog({
                                     </h4>
                                     <div className="bg-green-50 rounded-lg p-4 border-l-4 border-green-300">
                                       <ul className="space-y-2">
-                                        {experience.achievements.map((achievement, achIndex) => (
+                                        {experience.achievements.map((achievement: string, achIndex: number) => (
                                           <li key={achIndex} className="flex items-start">
                                             <span className="text-green-500 mr-3 mt-1">★</span>
                                             <span className="text-gray-700 leading-relaxed">{achievement}</span>
@@ -909,7 +909,7 @@ export function CandidatePreviewDialog({
                                     </h4>
                                     <div className="bg-purple-50 rounded-lg p-4 border-l-4 border-purple-300">
                                       <div className="flex flex-wrap gap-2">
-                                        {experience.technologies.map((tech, techIndex) => (
+                                        {experience.technologies.map((tech: string, techIndex: number) => (
                                           <Badge key={techIndex} variant="outline" className="bg-white border-purple-200 text-purple-700">
                                             {tech}
                                           </Badge>
@@ -941,7 +941,7 @@ export function CandidatePreviewDialog({
                     </CardHeader>
                     <CardContent>
                       <div className="grid grid-cols-1 gap-4">
-                        {safeCandidate.keyAchievements.map((achievement, index) => (
+                        {safeCandidate.keyAchievements.map((achievement: string, index: number) => (
                           <div key={index} className="flex items-start p-4 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border-l-4 border-yellow-400">
                             <Trophy className="h-6 w-6 text-yellow-600 mr-3 mt-1 flex-shrink-0" />
                             <span className="text-gray-700 font-medium leading-relaxed">{achievement}</span>
@@ -998,7 +998,7 @@ export function CandidatePreviewDialog({
                       </CardHeader>
                       <CardContent>
                         <div className="grid grid-cols-1 gap-3">
-                          {safeCandidate.certifications.map((cert, index) => (
+                          {safeCandidate.certifications.map((cert: any, index: number) => (
                             <div key={index} className="flex items-center p-3 bg-orange-50 rounded-lg border border-orange-200">
                               <Award className="h-5 w-5 text-orange-600 mr-3 flex-shrink-0" />
                               <span className="text-gray-800 font-medium">{cert}</span>
@@ -1024,7 +1024,7 @@ export function CandidatePreviewDialog({
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-8">
-                        {safeCandidate.education.map((edu, index) => (
+                        {safeCandidate.education.map((edu: any, index: number) => (
                           <div key={index} className="relative">
                             {/* Timeline connector */}
                             {index < safeCandidate.education!.length - 1 && (
@@ -1166,7 +1166,7 @@ export function CandidatePreviewDialog({
                     </CardHeader>
                     <CardContent>
                       <div className="flex flex-wrap gap-3">
-                        {safeCandidate.technicalSkills.map((skill, index) => (
+                        {safeCandidate.technicalSkills.map((skill: string, index: number) => (
                           <Badge
                             key={index}
                             variant={
@@ -1197,7 +1197,7 @@ export function CandidatePreviewDialog({
                     </CardHeader>
                     <CardContent>
                       <div className="flex flex-wrap gap-3">
-                        {safeCandidate.softSkills.map((skill, index) => (
+                        {safeCandidate.softSkills.map((skill: string, index: number) => (
                           <Badge key={index} variant="secondary" className="text-sm px-3 py-1 bg-pink-50 border-pink-200 text-pink-700 font-medium">
                             {skill}
                           </Badge>
@@ -1217,7 +1217,7 @@ export function CandidatePreviewDialog({
                         <div>
                           <h4 className="font-semibold text-gray-800 mb-3 text-lg">Matching Keywords</h4>
                           <div className="flex flex-wrap gap-2">
-                            {safeCandidate.matchingKeywords.map((keyword, index) => (
+                            {safeCandidate.matchingKeywords.map((keyword: string, index: number) => (
                               <Badge key={index} variant="default" className="bg-green-600 text-white px-3 py-1 shadow-md">
                                 {keyword}
                               </Badge>
@@ -1252,7 +1252,7 @@ export function CandidatePreviewDialog({
                                   Exact Matches
                                 </h5>
                                 <div className="flex flex-wrap gap-2">
-                                  {safeCandidate.matchingKeywords.map((keyword, index) => (
+                                  {safeCandidate.matchingKeywords.map((keyword: string, index: number) => (
                                     <Badge key={index} variant="default" className="bg-green-600 text-white px-3 py-1 shadow-sm">
                                       {keyword}
                                     </Badge>

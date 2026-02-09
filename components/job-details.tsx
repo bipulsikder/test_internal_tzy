@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Label } from "@/components/ui/label"
-import { getBoardJobApplyUrl, normalizeExternalUrl } from "@/lib/utils"
+import { cachedFetchJson, getBoardJobApplyUrl, invalidateSessionCache, normalizeExternalUrl } from "@/lib/utils"
 
 const CandidatePreviewDialogDynamic = dynamic(() => import("./candidate-preview-dialog").then(m => m.CandidatePreviewDialog), {
   ssr: false,
@@ -165,8 +165,9 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
   }, [job.id])
 
   useEffect(() => {
-    fetch(`/api/job-invites?jobId=${job.id}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Failed to load invites"))))
+    cachedFetchJson<{ invites: JobInvite[] }>(`internal:job-invites:${job.id}`, `/api/job-invites?jobId=${job.id}`, undefined, {
+      ttlMs: 5 * 60_000,
+    })
       .then((d) => setInvites(Array.isArray(d?.invites) ? d.invites : []))
       .catch((e: any) => {
         setInvites([])
@@ -174,12 +175,15 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
       })
   }, [job.id])
 
-  const fetchInterviewData = async () => {
+  const fetchInterviewData = async (opts?: { force?: boolean }) => {
     setInterviewLoading(true)
     try {
-      const res = await fetch(`/api/jobs/${job.id}/interviews`, { cache: "no-store" })
-      const data = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(data?.error || "Failed to load interviews")
+      const data = await cachedFetchJson<{ rounds: InterviewRound[]; interviews: InterviewEntry[] }>(
+        `internal:job-interviews:${job.id}`,
+        `/api/jobs/${job.id}/interviews`,
+        undefined,
+        { ttlMs: 3 * 60_000, force: Boolean(opts?.force) },
+      )
 
       const rounds = Array.isArray(data?.rounds) ? (data.rounds as InterviewRound[]) : []
       const interviews = Array.isArray(data?.interviews) ? (data.interviews as InterviewEntry[]) : []
@@ -255,7 +259,8 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
         })
         const data = await res.json().catch(() => null)
         if (!res.ok) throw new Error(data?.error || "Failed to create round")
-        await fetchInterviewData()
+        invalidateSessionCache(`internal:job-interviews:${job.id}`)
+        await fetchInterviewData({ force: true })
         if (data?.round?.id) setInterviewRoundId(data.round.id)
       } else {
         const id = roundEditorRoundId
@@ -267,7 +272,8 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
         })
         const data = await res.json().catch(() => null)
         if (!res.ok) throw new Error(data?.error || "Failed to rename")
-        await fetchInterviewData()
+        invalidateSessionCache(`internal:job-interviews:${job.id}`)
+        await fetchInterviewData({ force: true })
       }
 
       setRoundEditorOpen(false)
@@ -392,7 +398,13 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
       if (!res.ok) throw new Error(data?.error || "Failed to create invite")
       setInviteEmail("")
       toast({ title: "Invite created", description: data?.emailSent ? "Email sent" : "Invite link created" })
-      const refreshed = await fetch(`/api/job-invites?jobId=${job.id}`).then((r) => (r.ok ? r.json() : null))
+      invalidateSessionCache(`internal:job-invites:${job.id}`)
+      const refreshed = await cachedFetchJson<{ invites: JobInvite[] }>(
+        `internal:job-invites:${job.id}`,
+        `/api/job-invites?jobId=${job.id}`,
+        undefined,
+        { force: true },
+      )
       setInvites(Array.isArray(refreshed?.invites) ? refreshed.invites : invites)
       if (data?.link) {
         try {
@@ -420,7 +432,13 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error(data?.error || "Failed to resend")
       toast({ title: "Resent", description: data?.emailSent ? "Invite email resent." : "Invite link ready." })
-      const refreshed = await fetch(`/api/job-invites?jobId=${job.id}`).then((r) => (r.ok ? r.json() : null))
+      invalidateSessionCache(`internal:job-invites:${job.id}`)
+      const refreshed = await cachedFetchJson<{ invites: JobInvite[] }>(
+        `internal:job-invites:${job.id}`,
+        `/api/job-invites?jobId=${job.id}`,
+        undefined,
+        { force: true },
+      )
       setInvites(Array.isArray(refreshed?.invites) ? refreshed.invites : invites)
     } catch (e: any) {
       toast({ title: "Resend failed", description: e?.message || "Failed", variant: "destructive" })
@@ -434,8 +452,9 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
       setClient(null)
       return
     }
-    fetch("/api/clients")
-      .then((r) => (r.ok ? r.json() : []))
+    cachedFetchJson<any[]>(`internal:clients:list`, "/api/clients", undefined, {
+      ttlMs: 10 * 60_000,
+    })
       .then((rows) => {
         const found = Array.isArray(rows) ? rows.find((c: any) => c.id === job.client_id) : null
         setClient(found || null)
@@ -447,11 +466,14 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
     return (job.client_id && client?.name) || job.client_name || null
   }, [client?.name, job.client_id, job.client_name])
 
-  const fetchApplications = async () => {
+  const fetchApplications = async (opts?: { force?: boolean }) => {
     try {
-      const res = await fetch(`/api/applications?jobId=${job.id}`)
-      const data = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(data?.error || "Failed to fetch applications")
+      const data = await cachedFetchJson<Application[]>(
+        `internal:applications:job:${job.id}`,
+        `/api/applications?jobId=${job.id}`,
+        undefined,
+        { ttlMs: 5 * 60_000, force: Boolean(opts?.force) },
+      )
       setApplications(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error("Failed to fetch applications", error)
@@ -480,13 +502,14 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
         title: "Status Updated",
         description: `Candidate moved to ${newStatus}`,
       })
+      invalidateSessionCache(`internal:applications:job:${job.id}`)
     } catch (error) {
       toast({
         title: "Error",
         description: "Failed to update status",
         variant: "destructive",
       })
-      fetchApplications() // Revert on error
+      fetchApplications({ force: true }) // Revert on error
     }
   }
 
@@ -540,13 +563,14 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
             title: "Note Saved",
             description: "Candidate notes updated successfully",
         })
+        invalidateSessionCache(`internal:applications:job:${job.id}`)
     } catch (error) {
         toast({
             title: "Error",
             description: "Failed to save note",
             variant: "destructive",
         })
-        fetchApplications() // Revert
+        fetchApplications({ force: true }) // Revert
     }
   }
 
@@ -1023,7 +1047,7 @@ export function JobDetails({ job, onBack, initialTab }: JobDetailsProps) {
                       Round
                     </Button>
                   </div>
-                  <Button variant="outline" size="sm" className="h-8" onClick={fetchInterviewData} disabled={interviewLoading}>
+                  <Button variant="outline" size="sm" className="h-8" onClick={() => fetchInterviewData({ force: true })} disabled={interviewLoading}>
                     {interviewLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     Refresh
                   </Button>
